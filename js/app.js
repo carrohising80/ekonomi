@@ -309,6 +309,12 @@ function monthNavHtml() {
     </div>`;
 }
 
+function isMonthEmpty() {
+  const m = state.data.months[state.month];
+  if (!m) return true;
+  return !m.income.length && !m.fixed.length && !m.variable.length && !m.periodic.length;
+}
+
 function noMonthHtml() {
   const months = Object.keys(state.data.months).sort().reverse();
   const [y, mo] = state.month.split('-').map(Number);
@@ -411,7 +417,7 @@ function renderDashboard() {
   const yyyyMm = state.month;
   const el = document.getElementById('view-dashboard');
 
-  if (!state.data.months[yyyyMm]) {
+  if (!state.data.months[yyyyMm] || isMonthEmpty()) {
     el.innerHTML = `
       <div class="view-header"><div><h1>Översikt</h1>${monthNavHtml()}</div></div>
       ${noMonthHtml()}`;
@@ -582,6 +588,10 @@ function renderIncome() {
     el.innerHTML = `<div class="view-header"><div><h1>Inkomster</h1>${monthNavHtml()}</div></div>${noMonthHtml()}`;
     return;
   }
+  if (isMonthEmpty()) {
+    el.innerHTML = `<div class="view-header"><div><h1>Inkomster</h1>${monthNavHtml()}</div></div>${noMonthHtml()}`;
+    return;
+  }
   const m = md();
   const total = sum(m.income, i => i.amount);
 
@@ -628,6 +638,10 @@ function renderIncome() {
 function renderFixed() {
   const el = document.getElementById('view-fixed');
   if (!state.data.months[state.month]) {
+    el.innerHTML = `<div class="view-header"><div><h1>Fasta kostnader</h1>${monthNavHtml()}</div></div>${noMonthHtml()}`;
+    return;
+  }
+  if (isMonthEmpty()) {
     el.innerHTML = `<div class="view-header"><div><h1>Fasta kostnader</h1>${monthNavHtml()}</div></div>${noMonthHtml()}`;
     return;
   }
@@ -714,6 +728,10 @@ function renderVariable() {
     el.innerHTML = `<div class="view-header"><div><h1>Rörliga kostnader</h1>${monthNavHtml()}</div></div>${noMonthHtml()}`;
     return;
   }
+  if (isMonthEmpty()) {
+    el.innerHTML = `<div class="view-header"><div><h1>Rörliga kostnader</h1>${monthNavHtml()}</div></div>${noMonthHtml()}`;
+    return;
+  }
   const m = md();
   const total = sum(m.variable, i => i.budget);
 
@@ -785,6 +803,10 @@ function renderVariable() {
 function renderPeriodic() {
   const el = document.getElementById('view-periodic');
   if (!state.data.months[state.month]) {
+    el.innerHTML = `<div class="view-header"><div><h1>Periodiska kostnader</h1>${monthNavHtml()}</div></div>${noMonthHtml()}`;
+    return;
+  }
+  if (isMonthEmpty()) {
     el.innerHTML = `<div class="view-header"><div><h1>Periodiska kostnader</h1>${monthNavHtml()}</div></div>${noMonthHtml()}`;
     return;
   }
