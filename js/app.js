@@ -807,6 +807,7 @@ function renderPeriodic() {
           <div class="item-name">${h(item.name)}</div>
           <div class="item-meta">
             ${fmt(item.totalAmount)} · ${h(FREQ_LABELS[item.frequencyMonths] || 'periodiskt')}${nextInfo}
+            ${(item.share && item.share < 100) ? ` · <span class="badge badge-share">${item.share}%</span>` : ''}
             ${item.note ? ' · ' + h(item.note) : ''}
             ${item.person ? ` · <span class="badge badge-person">${h(PERSON_LABELS[item.person] ?? item.person)}</span>` : ''}
           </div>
@@ -1381,6 +1382,15 @@ function periodicForm(item) {
       <select id="f-freq" class="form-select">${freqOptions}</select>
     </div>
     <div class="form-group">
+      <label class="form-label">Min andel (%)</label>
+      <div class="share-row">
+        <input type="range" id="f-share-range" min="1" max="100" step="1" value="${item?.share ?? 100}" class="share-slider">
+        <input type="number" id="f-share" class="form-input share-input" min="1" max="100" step="1" value="${item?.share ?? 100}">
+        <span class="share-pct-label">%</span>
+      </div>
+      <div class="form-hint">Sätt lägre än 100% om du delar kostnaden med någon.</div>
+    </div>
+    <div class="form-group">
       <label class="form-label">Förfallomånad <span style="font-weight:400;color:var(--text-light)">(valfritt – ange en känd betalningsmånad)</span></label>
       <input type="month" id="f-payment-month" class="form-input" value="${h(item?.paymentMonth ?? '')}">
     </div>
@@ -1413,12 +1423,20 @@ function attachPeriodicPreview() {
     const spanEl = document.getElementById('calc-amount');
     if (!amountEl || !freqEl) return;
 
+    const shareEl = document.getElementById('f-share');
+    const shareRangeEl = document.getElementById('f-share-range');
+    if (shareEl && shareRangeEl) {
+      shareEl.addEventListener('input', () => { shareRangeEl.value = shareEl.value; update(); });
+      shareRangeEl.addEventListener('input', () => { shareEl.value = shareRangeEl.value; update(); });
+    }
+
     function update() {
       const a = parseFloat(amountEl.value);
       const f = parseInt(freqEl.value, 10);
+      const s = parseFloat(document.getElementById('f-share')?.value) || 100;
       if (a > 0 && f > 0) {
         previewEl.style.display = 'block';
-        spanEl.textContent = fmt(a / f);
+        spanEl.textContent = fmt(a * (s / 100) / f);
       } else {
         previewEl.style.display = 'none';
       }
@@ -1435,12 +1453,14 @@ function showAddPeriodic() {
     const name           = document.getElementById('f-name').value.trim();
     const totalAmount    = parseFloat(document.getElementById('f-amount').value);
     const frequencyMonths = parseInt(document.getElementById('f-freq').value, 10);
+    const share          = parseFloat(document.getElementById('f-share').value) || 100;
     const paymentMonth   = document.getElementById('f-payment-month').value || null;
     const note           = document.getElementById('f-note').value.trim();
     const person         = document.getElementById('f-person').value;
     if (!name) return notify('Ange ett namn.');
     if (!(totalAmount > 0)) return notify('Ange ett giltigt belopp.');
-    ensureMonth().periodic.push({ id: genId(), name, totalAmount, frequencyMonths, paymentMonth, note, person });
+    const myAmount = Math.round(totalAmount * (share / 100) * 100) / 100;
+    ensureMonth().periodic.push({ id: genId(), name, totalAmount: myAmount, share, frequencyMonths, paymentMonth, note, person });
     saveData(); closeModal(); renderPeriodic();
   });
   attachPeriodicPreview();
@@ -1453,12 +1473,14 @@ function editPeriodic(id) {
     const name           = document.getElementById('f-name').value.trim();
     const totalAmount    = parseFloat(document.getElementById('f-amount').value);
     const frequencyMonths = parseInt(document.getElementById('f-freq').value, 10);
+    const share          = parseFloat(document.getElementById('f-share').value) || 100;
     const paymentMonth   = document.getElementById('f-payment-month').value || null;
     const note           = document.getElementById('f-note').value.trim();
     const person         = document.getElementById('f-person').value;
     if (!name) return notify('Ange ett namn.');
     if (!(totalAmount > 0)) return notify('Ange ett giltigt belopp.');
-    item.name = name; item.totalAmount = totalAmount;
+    const myAmount = Math.round(totalAmount * (share / 100) * 100) / 100;
+    item.name = name; item.totalAmount = myAmount; item.share = share;
     item.frequencyMonths = frequencyMonths; item.paymentMonth = paymentMonth; item.note = note; item.person = person;
     saveData(); closeModal(); renderPeriodic();
   });
