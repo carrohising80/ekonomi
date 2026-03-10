@@ -1201,6 +1201,9 @@ function navigate(view) {
    ============================================= */
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Rensa gammal localStorage-data från innan Supabase
+    localStorage.removeItem('ekonomi_v1');
+
     // Login form
     document.getElementById('btn-login').addEventListener('click', handleLogin);
     document.getElementById('login-password').addEventListener('keydown', e => {
@@ -1208,15 +1211,24 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     db.auth.onAuthStateChange(async (event, session) => {
+        const loadingEl = document.getElementById('loading-screen');
+        const loginEl   = document.getElementById('login-screen');
+
         if (session) {
             state.userId = session.user.id;
-            document.getElementById('login-screen').classList.add('hidden');
-            await loadData();
+            loginEl.classList.add('hidden');
+            try {
+                await loadData();
+            } catch (e) {
+                console.warn('loadData misslyckades:', e);
+            }
+            if (loadingEl) loadingEl.classList.add('hidden');
             initApp();
         } else {
             state.userId = null;
-            state.data = newData();
-            document.getElementById('login-screen').classList.remove('hidden');
+            state.data   = newData();
+            if (loadingEl) loadingEl.classList.add('hidden');
+            loginEl.classList.remove('hidden');
         }
     });
 });
