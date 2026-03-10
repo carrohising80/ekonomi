@@ -14,6 +14,7 @@ const FIXED_CATEGORIES = [
   { id: 'bostad', label: 'Bostad', icon: '🏠', bg: '#EFF6FF' },
   { id: 'forsakring', label: 'Försäkringar', icon: '🛡️', bg: '#F5F3FF' },
   { id: 'lan', label: 'Lån & krediter', icon: '💳', bg: '#FFF7ED' },
+  { id: 'transport', label: 'Transport', icon: '🚗', bg: '#ECFDF5' },
   { id: 'streaming', label: 'Streaming & appar', icon: '📺', bg: '#FDF4FF' },
   { id: 'annat', label: 'Övrigt fast', icon: '📌', bg: '#F3F4F6' },
 ];
