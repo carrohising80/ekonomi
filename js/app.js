@@ -16,6 +16,7 @@ const FIXED_CATEGORIES = [
   { id: 'lan', label: 'Lån & krediter', icon: '💳', bg: '#FFF7ED' },
   { id: 'transport', label: 'Transport', icon: '🚗', bg: '#ECFDF5' },
   { id: 'streaming', label: 'Streaming & appar', icon: '📺', bg: '#FDF4FF' },
+  { id: 'abonnemang', label: 'Övriga abonnemang', icon: '📱', bg: '#F0F9FF' },
   { id: 'annat', label: 'Övrigt fast', icon: '📌', bg: '#F3F4F6' },
 ];
 
