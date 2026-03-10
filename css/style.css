@@ -156,6 +156,13 @@ body {
   margin-bottom: 24px;
 }
 
+/* Allow view-header left side to stack h1 + month-nav */
+.view-header > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .view-header h1 {
   font-size: 22px;
   font-weight: 700;
@@ -167,6 +174,53 @@ body {
   margin-top: 3px;
   font-size: 13px;
   color: var(--text-muted);
+}
+
+/* Month navigation */
+.month-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.month-nav-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 130px;
+  text-align: center;
+}
+
+.month-nav-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 8px;
+  transition: background .15s, color .15s;
+}
+
+.month-nav-btn:hover {
+  background: var(--border-light);
+  color: var(--text);
+}
+
+/* Periodic card section labels */
+.dash-periodic-section { }
+.dash-periodic-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-light);
+  padding: 10px 16px 4px;
+}
+.dash-periodic-section + .dash-periodic-section {
+  border-top: 1px solid var(--border-light);
 }
 
 /* =============================================
