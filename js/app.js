@@ -786,6 +786,7 @@ function renderPeriodic() {
   const m = md();
   const monthlyTotal = sum(m.periodic, i => i.totalAmount / i.frequencyMonths);
 
+  const PERSON_LABELS = { mig: '👤 Mig', elias: '👦 Elias', oliver: '👦 Oliver', zoe: '🐶 Zoe', ovrigt: '📦 Övrigt' };
   const rows = m.periodic.map(item => {
     const monthly = item.totalAmount / item.frequencyMonths;
     let nextInfo = '';
@@ -807,6 +808,7 @@ function renderPeriodic() {
           <div class="item-meta">
             ${fmt(item.totalAmount)} · ${h(FREQ_LABELS[item.frequencyMonths] || 'periodiskt')}${nextInfo}
             ${item.note ? ' · ' + h(item.note) : ''}
+            ${item.person ? ` · <span class="badge badge-person">${h(PERSON_LABELS[item.person] ?? item.person)}</span>` : ''}
           </div>
         </div>
         <div style="text-align:right; margin-right:14px; white-space:nowrap;">
@@ -1383,6 +1385,17 @@ function periodicForm(item) {
       <input type="month" id="f-payment-month" class="form-input" value="${h(item?.paymentMonth ?? '')}">
     </div>
     <div class="form-group">
+      <label class="form-label">Gäller <span style="font-weight:400;color:var(--text-muted)">(valfritt)</span></label>
+      <select id="f-person" class="form-select">
+        <option value=""       ${!item?.person ? 'selected' : ''}>— Välj person —</option>
+        <option value="mig"    ${item?.person === 'mig' ? 'selected' : ''}>👤 Mig</option>
+        <option value="elias"  ${item?.person === 'elias' ? 'selected' : ''}>👦 Elias</option>
+        <option value="oliver" ${item?.person === 'oliver' ? 'selected' : ''}>👦 Oliver</option>
+        <option value="zoe"    ${item?.person === 'zoe' ? 'selected' : ''}>🐶 Zoe</option>
+        <option value="ovrigt" ${item?.person === 'ovrigt' ? 'selected' : ''}>📦 Övrigt</option>
+      </select>
+    </div>
+    <div class="form-group">
       <label class="form-label">Anteckning <span style="font-weight:400;color:var(--text-light)">(valfritt)</span></label>
       <input type="text" id="f-note" class="form-input" placeholder="T.ex. kvartal, period" value="${h(item?.note ?? '')}">
     </div>
@@ -1424,9 +1437,10 @@ function showAddPeriodic() {
     const frequencyMonths = parseInt(document.getElementById('f-freq').value, 10);
     const paymentMonth   = document.getElementById('f-payment-month').value || null;
     const note           = document.getElementById('f-note').value.trim();
+    const person         = document.getElementById('f-person').value;
     if (!name) return notify('Ange ett namn.');
     if (!(totalAmount > 0)) return notify('Ange ett giltigt belopp.');
-    ensureMonth().periodic.push({ id: genId(), name, totalAmount, frequencyMonths, paymentMonth, note });
+    ensureMonth().periodic.push({ id: genId(), name, totalAmount, frequencyMonths, paymentMonth, note, person });
     saveData(); closeModal(); renderPeriodic();
   });
   attachPeriodicPreview();
@@ -1441,10 +1455,11 @@ function editPeriodic(id) {
     const frequencyMonths = parseInt(document.getElementById('f-freq').value, 10);
     const paymentMonth   = document.getElementById('f-payment-month').value || null;
     const note           = document.getElementById('f-note').value.trim();
+    const person         = document.getElementById('f-person').value;
     if (!name) return notify('Ange ett namn.');
     if (!(totalAmount > 0)) return notify('Ange ett giltigt belopp.');
     item.name = name; item.totalAmount = totalAmount;
-    item.frequencyMonths = frequencyMonths; item.paymentMonth = paymentMonth; item.note = note;
+    item.frequencyMonths = frequencyMonths; item.paymentMonth = paymentMonth; item.note = note; item.person = person;
     saveData(); closeModal(); renderPeriodic();
   });
   attachPeriodicPreview();
