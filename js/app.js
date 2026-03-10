@@ -648,9 +648,10 @@ function renderFixed() {
                       : fromLbl          ? ` · Från ${fromLbl}`
                       : toLbl            ? ` · Till ${toLbl}`
                       : '';
+      const companyStr = (!item.type && item.company) ? `${h(item.company)} · ` : '';
       const meta = item.type === 'mortgage'
         ? `${Math.round(item.loanAmount / 1000)}\u00a0kkr · ${(item.listRate - (item.rateDiscount || 0)).toFixed(2)}% · ${item.taxMode === 'after' ? 'inkl. skatterabatt' : 'exkl. skatterabatt'}`
-        : `<span class="badge badge-${cat.id}">${h(cat.label)}</span> ${shareBadge} ${personBadge}${periodStr}`;
+        : `${companyStr}<span class="badge badge-${cat.id}">${h(cat.label)}</span> ${shareBadge} ${personBadge}${periodStr}`;
       return `
         <div class="item-row">
           <div class="item-icon" style="background:${cat.bg}">${cat.icon}</div>
@@ -966,6 +967,10 @@ function fixedForm(item) {
       <label class="form-label">Namn</label>
       <input type="text" id="f-name" class="form-input" placeholder="T.ex. Hemförsäkring, Billån" value="${h(item?.name ?? '')}">
     </div>
+    <div class="form-group">
+      <label class="form-label">Bolag <span style="font-weight:400;color:var(--text-muted)">(valfritt)</span></label>
+      <input type="text" id="f-company" class="form-input" placeholder="T.ex. Folksam, Avanza, Netflix" value="${h(item?.company ?? '')}">
+    </div>
 
     <div class="form-row-2">
       <div class="form-group">
@@ -1082,6 +1087,7 @@ function resolveFixedAmount() {
 function showAddFixed() {
   showModal('Lägg till fast kostnad', fixedForm(null), () => {
     const name       = document.getElementById('f-name').value.trim();
+    const company    = document.getElementById('f-company').value.trim() || null;
     const category   = document.getElementById('f-cat').value;
     const person     = document.getElementById('f-person').value;
     const periodFrom = document.getElementById('f-period-from').value || null;
@@ -1089,7 +1095,7 @@ function showAddFixed() {
     const resolved   = resolveFixedAmount();
     if (!name)     return notify('Ange ett namn.');
     if (!resolved) return notify('Ange ett giltigt belopp.');
-    ensureMonth().fixed.push({ id: genId(), name, amount: resolved.monthly, category, period: resolved.period, share: resolved.share, person, periodFrom, periodTo });
+    ensureMonth().fixed.push({ id: genId(), name, company, amount: resolved.monthly, category, period: resolved.period, share: resolved.share, person, periodFrom, periodTo });
     saveData(); closeModal(); renderFixed();
   });
   attachFixedPreview();
@@ -1100,6 +1106,7 @@ function editFixed(id) {
   if (!item) return;
   showModal('Redigera fast kostnad', fixedForm(item), () => {
     const name       = document.getElementById('f-name').value.trim();
+    const company    = document.getElementById('f-company').value.trim() || null;
     const category   = document.getElementById('f-cat').value;
     const resolved   = resolveFixedAmount();
     const person     = document.getElementById('f-person').value;
@@ -1107,7 +1114,7 @@ function editFixed(id) {
     const periodTo   = document.getElementById('f-period-to').value || null;
     if (!name)     return notify('Ange ett namn.');
     if (!resolved) return notify('Ange ett giltigt belopp.');
-    item.name = name; item.amount = resolved.monthly; item.category = category;
+    item.name = name; item.company = company; item.amount = resolved.monthly; item.category = category;
     item.period = resolved.period; item.share = resolved.share; item.person = person;
     item.periodFrom = periodFrom; item.periodTo = periodTo;
     saveData(); closeModal(); renderFixed();
