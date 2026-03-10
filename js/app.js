@@ -1207,11 +1207,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Enter') handleLogin();
     });
 
-    // DEV MODE: hoppa över inloggning – återaktivera onAuthStateChange-blocket nedan inför deploy
-    document.getElementById('login-screen').classList.add('hidden');
-    initApp();
-
-    /* PRODUKTION – avkommentera detta och ta bort de två raderna ovan:
     db.auth.onAuthStateChange(async (event, session) => {
         if (session) {
             state.userId = session.user.id;
@@ -1224,5 +1219,4 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('login-screen').classList.remove('hidden');
         }
     });
-    */
 });
