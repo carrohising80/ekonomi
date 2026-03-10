@@ -453,22 +453,22 @@ function renderDashboard() {
     </div>
 
     <div class="summary-grid">
-      <div class="summary-card sc-income">
+      <div class="summary-card sc-income" style="cursor:pointer;" onclick="navigate('income')">
         <div class="s-label">Inkomster</div>
         <div class="s-amount">${fmt(t.income)}</div>
         <div class="s-sub">${md().income.length} källa${md().income.length !== 1 ? 'r' : ''}</div>
       </div>
-      <div class="summary-card sc-expense">
+      <div class="summary-card sc-expense" style="cursor:pointer;" onclick="navigate('fixed')">
         <div class="s-label">Fasta kostnader</div>
         <div class="s-amount">${fmt(t.fixed)}</div>
         <div class="s-sub">${md().fixed.length} poster</div>
       </div>
-      <div class="summary-card sc-variable">
+      <div class="summary-card sc-variable" style="cursor:pointer;" onclick="navigate('variable')">
         <div class="s-label">Rörliga (budget)</div>
         <div class="s-amount">${fmt(t.variable)}</div>
         <div class="s-sub">${md().variable.length} poster</div>
       </div>
-      <div class="summary-card sc-periodic">
+      <div class="summary-card sc-periodic" style="cursor:pointer;" onclick="navigate('periodic')">
         <div class="s-label">Periodiskt denna mån</div>
         <div class="s-amount">${fmt(t.periodicThisMonth + t.periodicAverage)}</div>
         <div class="s-sub">${t.periodicItems.length} faktura${t.periodicItems.length !== 1 ? 'r' : ''}${t.undatedItems.length > 0 ? ' + avsättning' : ''}</div>
@@ -504,7 +504,7 @@ function dashFixedCard() {
   }).filter(Boolean);
 
   const rows = grouped.map(g => `
-    <div class="item-row" style="cursor:default;">
+    <div class="item-row" style="cursor:pointer;" onclick="navigateAndScroll('fixed','cat-fixed-${g.id}')" title="Visa ${h(g.label)}">
       <div class="item-icon" style="background:${g.bg}">${g.icon}</div>
       <div class="item-info">
         <div class="item-name">${h(g.label)}</div>
@@ -534,7 +534,7 @@ function dashPeriodicCard(yyyyMm) {
   const otherMonths = md().periodic.filter(i => i.paymentMonth && !periodicFallsInMonth(i, yyyyMm));
 
   const makeRow = (item, amount, sub) => `
-    <div class="item-row" style="cursor:default;">
+    <div class="item-row" style="cursor:pointer;" onclick="navigate('periodic')" title="Visa periodiska kostnader">
       <div class="item-icon" style="background:var(--warning-bg)">📅</div>
       <div class="item-info">
         <div class="item-name">${h(item.name)}</div>
@@ -686,7 +686,7 @@ function renderFixed() {
     }).join('');
 
     return `
-      <div class="cat-section">
+      <div class="cat-section" id="cat-fixed-${cat.id}">
         <div class="cat-header">
           <div class="cat-icon" style="background:${cat.bg}">${cat.icon}</div>
           <span class="cat-title">${h(cat.label)}</span>
@@ -1563,6 +1563,15 @@ function exportJSON() {
 function navigate(view) {
   state.view = view;
   render();
+}
+
+function navigateAndScroll(view, anchorId) {
+  state.view = view;
+  render();
+  setTimeout(() => {
+    const el = document.getElementById(anchorId);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 80);
 }
 
 /* =============================================
