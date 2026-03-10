@@ -755,7 +755,7 @@ function renderVariable() {
         <div class="item-icon" style="background:${cat.bg}">${cat.icon}</div>
         <div class="item-info">
           <div class="item-name">${h(item.name)}</div>
-          <div class="item-meta">${cat.label}${periodMeta}</div>
+          <div class="item-meta">${cat.label}${periodMeta}${item.note ? ' · ' + h(item.note) : ''}</div>
         </div>
         <div class="item-amount amount-expense">${fmt(item.budget)}</div>
         <div class="item-actions">
@@ -1358,6 +1358,10 @@ function variableForm(item) {
       </div>
       <div class="form-hint">Välj period i listan eller ange datum. T.ex. om vattenräkningen i mars gäller förbrukning jan–feb.</div>
     </div>
+    <div class="form-group">
+      <label class="form-label">Kommentar <span style="font-weight:400;color:var(--text-light)">(valfritt)</span></label>
+      <input type="text" id="f-note" class="form-input" placeholder="T.ex. extrakostnad, engång" value="${h(item?.note ?? '')}">
+    </div>
   `;
 }
 
@@ -1369,9 +1373,10 @@ function showAddVariable() {
     const periodType = document.getElementById('f-period-type').value || null;
     const periodFrom = document.getElementById('f-period-from').value || null;
     const periodTo   = document.getElementById('f-period-to').value || null;
+    const note       = document.getElementById('f-note').value.trim() || null;
     if (!name)         return notify('Ange ett namn.');
     if (!(budget > 0)) return notify('Ange ett giltigt belopp.');
-    ensureMonth().variable.push({ id: genId(), name, budget, category, periodType, periodFrom, periodTo });
+    ensureMonth().variable.push({ id: genId(), name, budget, category, periodType, periodFrom, periodTo, note });
     saveData(); closeModal(); renderVariable();
   });
 }
@@ -1386,10 +1391,11 @@ function editVariable(id) {
     const periodType = document.getElementById('f-period-type').value || null;
     const periodFrom = document.getElementById('f-period-from').value || null;
     const periodTo   = document.getElementById('f-period-to').value || null;
+    const note       = document.getElementById('f-note').value.trim() || null;
     if (!name)         return notify('Ange ett namn.');
     if (!(budget > 0)) return notify('Ange ett giltigt belopp.');
     item.name = name; item.budget = budget; item.category = category;
-    item.periodType = periodType; item.periodFrom = periodFrom; item.periodTo = periodTo;
+    item.periodType = periodType; item.periodFrom = periodFrom; item.periodTo = periodTo; item.note = note;
     saveData(); closeModal(); renderVariable();
   });
 }
