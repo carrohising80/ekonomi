@@ -726,9 +726,11 @@ function renderVariable() {
       const fmtDate = s => s ? new Intl.DateTimeFormat('sv-SE', { day: 'numeric', month: 'short' }).format(new Date(s)) : null;
       const fromLbl = fmtDate(item.periodFrom);
       const toLbl   = fmtDate(item.periodTo);
-      const periodMeta = fromLbl && toLbl ? ` · Avser ${fromLbl}–${toLbl}`
-                       : fromLbl          ? ` · Fr\u00e5n ${fromLbl}`
-                       : toLbl            ? ` · Till ${toLbl}`
+      const PERIOD_TYPE_LABELS = { week: '1 vecka', '2week': '2 veckor', month: '1 månad' };
+      const periodMeta = item.periodType               ? ` · Avser ${PERIOD_TYPE_LABELS[item.periodType] ?? item.periodType}`
+                       : fromLbl && toLbl              ? ` · Avser ${fromLbl}–${toLbl}`
+                       : fromLbl                       ? ` · Fr\u00e5n ${fromLbl}`
+                       : toLbl                         ? ` · Till ${toLbl}`
                        : '';
       return `
       <div class="item-row">
@@ -1322,11 +1324,17 @@ function variableForm(item) {
     </div>
     <div class="form-group">
       <label class="form-label">Avser period <span style="font-weight:400;color:var(--text-light)">(valfritt)</span></label>
+      <select id="f-period-type" class="form-select" style="margin-bottom:8px;">
+        <option value=""      ${!item?.periodType ? 'selected' : ''}>— Ange period (valfritt) —</option>
+        <option value="week"  ${item?.periodType === 'week' ? 'selected' : ''}>1 vecka</option>
+        <option value="2week" ${item?.periodType === '2week' ? 'selected' : ''}>2 veckor</option>
+        <option value="month" ${item?.periodType === 'month' ? 'selected' : ''}>1 månad</option>
+      </select>
       <div class="form-row-2">
         <input type="date" id="f-period-from" class="form-input" value="${h(item?.periodFrom ?? '')}" placeholder="Från">
         <input type="date" id="f-period-to"   class="form-input" value="${h(item?.periodTo ?? '')}"   placeholder="Till">
       </div>
-      <div class="form-hint">T.ex. om vattenräkningen i mars gäller förbrukning jan–feb.</div>
+      <div class="form-hint">Välj period i listan eller ange datum. T.ex. om vattenräkningen i mars gäller förbrukning jan–feb.</div>
     </div>
   `;
 }
@@ -1336,11 +1344,12 @@ function showAddVariable() {
     const name       = document.getElementById('f-name').value.trim();
     const budget     = parseFloat(document.getElementById('f-budget').value);
     const category   = document.getElementById('f-cat').value;
+    const periodType = document.getElementById('f-period-type').value || null;
     const periodFrom = document.getElementById('f-period-from').value || null;
     const periodTo   = document.getElementById('f-period-to').value || null;
     if (!name)         return notify('Ange ett namn.');
     if (!(budget > 0)) return notify('Ange ett giltigt belopp.');
-    ensureMonth().variable.push({ id: genId(), name, budget, category, periodFrom, periodTo });
+    ensureMonth().variable.push({ id: genId(), name, budget, category, periodType, periodFrom, periodTo });
     saveData(); closeModal(); renderVariable();
   });
 }
@@ -1352,12 +1361,13 @@ function editVariable(id) {
     const name       = document.getElementById('f-name').value.trim();
     const budget     = parseFloat(document.getElementById('f-budget').value);
     const category   = document.getElementById('f-cat').value;
+    const periodType = document.getElementById('f-period-type').value || null;
     const periodFrom = document.getElementById('f-period-from').value || null;
     const periodTo   = document.getElementById('f-period-to').value || null;
     if (!name)         return notify('Ange ett namn.');
     if (!(budget > 0)) return notify('Ange ett giltigt belopp.');
     item.name = name; item.budget = budget; item.category = category;
-    item.periodFrom = periodFrom; item.periodTo = periodTo;
+    item.periodType = periodType; item.periodFrom = periodFrom; item.periodTo = periodTo;
     saveData(); closeModal(); renderVariable();
   });
 }
