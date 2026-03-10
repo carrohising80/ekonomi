@@ -413,6 +413,8 @@ body {
 .badge-lan        { background: #FFF7ED; color: #C2410C; }
 .badge-streaming  { background: #FDF4FF; color: #86198F; }
 .badge-annat      { background: var(--border-light); color: var(--text-muted); }
+.badge-person     { background: #F0FDF4; color: #15803D; }
+.badge-share      { background: #FFF7ED; color: #C2410C; }
 
 /* =============================================
    EMPTY STATE
@@ -612,6 +614,146 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 }
 
 .dash-grid .full { grid-column: 1 / -1; }
+
+/* =============================================
+   FIXED COST PREVIEW
+   ============================================= */
+
+.fixed-cost-preview {
+  background: var(--primary-light);
+  border: 1px solid #C7D2FE;
+  border-radius: var(--radius-xs);
+  padding: 12px 14px;
+  margin-top: -4px;
+  margin-bottom: 16px;
+}
+
+.fcg-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 3px 0;
+  color: var(--text-muted);
+}
+
+.fcg-row span:last-child { font-weight: 500; color: var(--text); }
+.fcg-row.highlight { border-top: 1px solid #C7D2FE; margin-top: 4px; padding-top: 7px; }
+.fcg-row.highlight span { color: var(--primary); font-weight: 700; }
+
+.share-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.share-slider {
+  flex: 1;
+  accent-color: var(--primary);
+  cursor: pointer;
+  height: 4px;
+}
+
+.share-input {
+  width: 68px !important;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.share-pct-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* =============================================
+   MORTGAGE CALCULATOR
+   ============================================= */
+
+.mortgage-preview {
+  background: #F8FAFF;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.mcg-section {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-muted);
+  margin: 12px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.mcg-section:first-child { margin-top: 0; }
+
+.mcg-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  padding: 4px 0;
+  color: var(--text-muted);
+}
+.mcg-row span:last-child { font-weight: 500; color: var(--text); }
+.mcg-row.highlight span:last-child { color: var(--primary); font-weight: 700; }
+.mcg-row.success-row span:last-child { color: var(--success); }
+.mcg-row.em-row {
+  background: var(--primary-light);
+  margin: 2px -16px;
+  padding: 6px 16px;
+  border-radius: 4px;
+}
+.mcg-row.em-row span { color: var(--primary); font-weight: 600; }
+.mcg-row.em-row span:last-child { color: var(--primary); }
+.mcg-row.buffer-row span { color: var(--warning); }
+.mcg-row.buffer-row span:last-child { color: var(--warning); }
+
+.form-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-muted);
+  margin: 20px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.form-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  padding: 10px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-xs);
+  transition: border-color .15s, background .15s;
+}
+.radio-label:has(input:checked) { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+.radio-label:hover { border-color: var(--primary); }
+.radio-label input[type="radio"] { accent-color: var(--primary); flex-shrink: 0; }
+
+#modal.wide { max-width: 560px; }
 
 /* =============================================
    RESPONSIVE — Mobile
