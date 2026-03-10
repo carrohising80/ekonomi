@@ -30,6 +30,7 @@ const VARIABLE_CATEGORIES = [
 ];
 
 const FREQ_LABELS = {
+  1: 'varje månad',
   2: 'varannan månad',
   3: 'var 3:e månad',
   4: 'var 4:e månad',
@@ -1364,7 +1365,7 @@ function editVariable(id) {
    ============================================= */
 
 function periodicForm(item) {
-  const freqOptions = [2, 3, 4, 6, 12, 24].map(m =>
+  const freqOptions = [1, 2, 3, 4, 6, 12, 24].map(m =>
     `<option value="${m}" ${item?.frequencyMonths === m ? 'selected' : m === 3 && !item ? 'selected' : ''}>${FREQ_LABELS[m]}</option>`
   ).join('');
 
