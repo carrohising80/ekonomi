@@ -48,7 +48,12 @@ function calcTotals() {
   const income          = sum(state.data.income,   i => i.amount);
   const fixed           = sum(state.data.fixed,    i => i.amount);
   const variable        = sum(state.data.variable, i => i.budget);
-  const periodicMonthly = sum(state.data.periodic, i => i.totalAmount / i.frequencyMonths);
+  const periodicMonthly = sum(state.data.periodic, i => {
+    if (i.frequencyType === 'days' && i.frequencyDays) {
+      return (i.totalAmount / i.frequencyDays) * 30.44;
+    }
+    return i.totalAmount / i.frequencyMonths;
+  });
   const totalOut        = fixed + variable + periodicMonthly;
   const remaining       = income - totalOut;
   return { income, fixed, variable, periodicMonthly, totalOut, remaining };

@@ -104,12 +104,16 @@ async function loadData() {
     // Migration: convert old flat format { income, fixed, variable, periodic } → { months: { 'YYYY-MM': ... } }
     if (Array.isArray(loaded.income) && !loaded.months) {
       const m = new Date().toISOString().substring(0, 7);
-      state.data = { months: { [m]: {
-        income:   loaded.income   || [],
-        fixed:    loaded.fixed    || [],
-        variable: loaded.variable || [],
-        periodic: loaded.periodic || [],
-      }}};
+      state.data = {
+        months: {
+          [m]: {
+            income: loaded.income || [],
+            fixed: loaded.fixed || [],
+            variable: loaded.variable || [],
+            periodic: loaded.periodic || [],
+          }
+        }
+      };
     } else {
       state.data = { months: {}, ...loaded };
     }
@@ -158,6 +162,7 @@ function initApp() {
 
   document.getElementById('btn-export').addEventListener('click', exportJSON);
   document.getElementById('btn-signout').addEventListener('click', () => db.auth.signOut());
+  document.getElementById('btn-clear-month').addEventListener('click', clearCurrentMonth);
 
   document.getElementById('modal-overlay').addEventListener('click', e => {
     if (e.target === e.currentTarget) closeModal();
@@ -180,7 +185,8 @@ function genId() {
 
 function fmt(n) {
   return new Intl.NumberFormat('sv-SE', {
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
   }).format(n) + '\u00a0kr';
 }
 
@@ -207,7 +213,12 @@ function calcTotals() {
   const income = sum(m.income, i => i.amount);
   const fixed = sum(m.fixed, i => i.amount);
   const variable = sum(m.variable, i => i.budget);
-  const periodicMonthly = sum(m.periodic, i => i.totalAmount / i.frequencyMonths);
+  const periodicMonthly = sum(m.periodic, i => {
+    if (i.frequencyType === 'days' && i.frequencyDays) {
+      return (i.totalAmount / i.frequencyDays) * 30.44;
+    }
+    return i.totalAmount / i.frequencyMonths;
+  });
   const totalOut = fixed + variable + periodicMonthly;
   const remaining = income - totalOut;
   return { income, fixed, variable, periodicMonthly, totalOut, remaining };
@@ -240,23 +251,82 @@ function periodicFallsInMonth(item, yyyyMm) {
 
 function calcMonthTotals(yyyyMm) {
   const m = state.data.months[yyyyMm] || newMonthData();
-  const income   = sum(m.income,   i => i.amount);
-  const fixed    = sum(m.fixed,    i => i.amount);
-  const variable = sum(m.variable, i => i.budget);
-  // Dated items: show full amount only in months they fall, 0 otherwise
-  const datedItems   = m.periodic.filter(i => i.paymentMonth);
-  const undatedItems = m.periodic.filter(i => !i.paymentMonth);
+  const income = sum(m.income, i => i.amount);
+  const fixed = sum(m.fixed, i => myShare(i.amount, i));
+  const variable = sum(m.variable, i => myShare(i.budget, i));
+
+  // Calculate total monthly savings for ALL periodic items (not just undated)
+  const periodicMonthlySavings = sum(m.periodic, i => {
+    if (i.frequencyType === 'days' && i.frequencyDays) {
+      return (i.totalAmount / i.frequencyDays) * 30.44;
+    }
+    return i.totalAmount / i.frequencyMonths;
+  });
+
+  // What's due this month specifically
+  const datedItems = m.periodic.filter(i => i.paymentMonth);
   const periodicThisMonth = sum(datedItems.filter(i => periodicFallsInMonth(i, yyyyMm)), i => i.totalAmount);
-  const periodicAverage   = sum(undatedItems, i => i.totalAmount / i.frequencyMonths);
-  const periodicItems     = datedItems.filter(i => periodicFallsInMonth(i, yyyyMm));
-  const totalOut = fixed + variable + periodicThisMonth + periodicAverage;
+
+  // Total: only count the monthly savings (not both)
+  const totalOut = fixed + variable + periodicMonthlySavings;
   const remaining = income - totalOut;
-  return { income, fixed, variable, periodicThisMonth, periodicAverage, totalOut, remaining, periodicItems, undatedItems };
+  return { income, fixed, variable, periodicThisMonth, periodicAverage: periodicMonthlySavings, totalOut, remaining };
 }
 
 function sum(arr, fn) {
   return arr.reduce((s, x) => s + (fn(x) || 0), 0);
 }
+
+// Returns the share of `amount` that I (Carro) pay, after accounting for Andreas's portion.
+// splitShare = how much % Andreas pays. My share = remaining %.
+function myShare(amount, item) {
+  if (!item.splitWith) return amount;
+  return amount * ((100 - (item.splitShare ?? 100)) / 100);
+}
+
+// Returns HTML for the debit day + month-offset control pair
+function debitDayHtml(item) {
+  const day = item?.debitDay ?? '';
+  const off = item?.debitMonthOffset ?? 0;
+  return `
+    <div class="form-group">
+      <label class="form-label">Dragningsdatum <span style="font-weight:400;color:var(--text-muted)">(valfritt)</span></label>
+      <div class="form-row-2">
+        <div>
+          <input type="number" id="f-debit-day" class="form-input" placeholder="Dag, t.ex. 25" min="1" max="31" step="1" value="${day}">
+        </div>
+        <div>
+          <select id="f-debit-offset" class="form-select">
+            <option value="0"  ${off === 0  ? 'selected' : ''}>Samma månad</option>
+            <option value="-1" ${off === -1 ? 'selected' : ''}>Månaden innan</option>
+            <option value="-2" ${off === -2 ? 'selected' : ''}>2 månader innan</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-hint">T.ex. dag 25 + månaden innan = dras 25 feb för mars-budgeten.</div>
+    </div>`;
+}
+
+// Returns a display string like "Drag. 25 feb (för mar)" given the budget month "2026-03"
+function debitStr(item, budgetMonth) {
+  if (!item?.debitDay) return '';
+  const day = item.debitDay;
+  const off = item.debitMonthOffset ?? 0;
+  if (off === 0) {
+    const monthLabel = budgetMonth
+      ? new Intl.DateTimeFormat('sv-SE', { month: 'long' }).format(new Date(budgetMonth + '-01'))
+      : 'denna månad';
+    return ` · Dras dag ${day} i ${monthLabel}`;
+  }
+  // Compute the actual calendar month from budgetMonth (YYYY-MM) + offset
+  if (!budgetMonth) return ` · Dras dag ${day}${off < 0 ? ' (mån innan)' : ''}`;
+  const [y, m] = budgetMonth.split('-').map(Number);
+  const d = new Date(y, m - 1 + off, 1);
+  const label = new Intl.DateTimeFormat('sv-SE', { month: 'long' }).format(d);
+  return ` · Dras ${day} ${label}`;
+}
+
+
 function calcMortgage(loanAmount, valuation, listRate, rateDiscount, bufferRate) {
   const effectiveRate = Math.max(0, listRate - rateDiscount);
   const ltv = valuation > 0 ? (loanAmount / valuation) * 100 : 0;
@@ -375,6 +445,47 @@ function createEmptyMonth() {
   saveData(); render();
 }
 
+function clearCurrentMonth() {
+  const m = state.month;
+  if (!m || !state.data.months || !state.data.months[m]) {
+    notify('Ingen månad vald eller data saknas.');
+    return;
+  }
+
+  const monthData = state.data.months[m];
+  const incomeCount = monthData.income?.length || 0;
+  const fixedCount = monthData.fixed?.length || 0;
+  const variableCount = monthData.variable?.length || 0;
+  const totalCount = incomeCount + fixedCount + variableCount;
+
+  if (totalCount === 0) {
+    notify('Det finns inga poster att ta bort för denna månad.');
+    return;
+  }
+
+  const label = new Date(m + '-15').toLocaleDateString('sv-SE', { month: 'long', year: 'numeric' });
+
+  showModal('Töm månad', `
+    <p style="margin-bottom:16px;">Vill du verkligen ta bort alla poster för <strong>${label}</strong>?</p>
+    <p style="color:var(--text-light);font-size:14px;margin-bottom:20px;">
+      ${incomeCount} inkomster, ${fixedCount} fasta kostnader, ${variableCount} rörliga kostnader kommer att raderas.
+    </p>
+    <div style="display:flex;gap:12px;">
+      <button class="btn" onclick="closeModal()" style="flex:1;">Avbryt</button>
+      <button class="btn btn-danger" onclick="confirmClearMonth()" style="flex:1;">Ja, ta bort</button>
+    </div>
+  `, () => { });
+}
+
+function confirmClearMonth() {
+  const m = state.month;
+  state.data.months[m] = newMonthData();
+  saveData();
+  closeModal();
+  render();
+  notify('Alla poster för denna månad har raderats.');
+}
+
 /* =============================================
    ICONS (inline SVGs)
    ============================================= */
@@ -424,7 +535,7 @@ function renderDashboard() {
     return;
   }
 
-  const t  = calcMonthTotals(yyyyMm);
+  const t = calcMonthTotals(yyyyMm);
   const neg = t.remaining < 0;
   const isCurrentMonth = yyyyMm === new Date().toISOString().substring(0, 7);
 
@@ -432,11 +543,16 @@ function renderDashboard() {
     .format(new Date(yyyyMm + '-15'));
   const monthTitle = monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1);
 
-  // Periodic breakdown row: only show if there are any periodic costs
-  const periodicRow = (t.periodicThisMonth > 0 || t.periodicAverage > 0) ? `
+  // Periodic breakdown row: show both what to pay this month AND what to save monthly
+  const periodicPayRow = t.periodicThisMonth > 0 ? `
     <div class="rc-breakdown-row">
-      <span class="rbl">Periodiskt${t.periodicThisMonth > 0 ? ' (denna mån)' : ' (ca/mån)'}</span>
-      <span class="rba">− ${fmt(t.periodicThisMonth + t.periodicAverage)}</span>
+      <span class="rbl">Periodiskt att betala</span>
+      <span class="rba">− ${fmt(t.periodicThisMonth)}</span>
+    </div>` : '';
+  const periodicSaveRow = t.periodicAverage > 0 ? `
+    <div class="rc-breakdown-row">
+      <span class="rbl">Periodiskt att spara</span>
+      <span class="rba">− ${fmt(t.periodicAverage)}</span>
     </div>` : '';
 
   el.innerHTML = `
@@ -470,8 +586,13 @@ function renderDashboard() {
       </div>
       <div class="summary-card sc-periodic" style="cursor:pointer;" onclick="navigate('periodic')">
         <div class="s-label">Periodiskt denna mån</div>
-        <div class="s-amount">${fmt(t.periodicThisMonth + t.periodicAverage)}</div>
-        <div class="s-sub">${t.periodicItems.length} faktura${t.periodicItems.length !== 1 ? 'r' : ''}${t.undatedItems.length > 0 ? ' + avsättning' : ''}</div>
+        <div class="s-amount">${fmt(t.periodicThisMonth)}</div>
+        <div class="s-sub">att betala nu</div>
+      </div>
+      <div class="summary-card" style="cursor:pointer;background:var(--warning-bg);" onclick="navigate('periodic')">
+        <div class="s-label" style="color:var(--warning)">Periodiskt att spara</div>
+        <div class="s-amount" style="color:var(--warning)">${fmt(t.periodicAverage)}</div>
+        <div class="s-sub">per månad</div>
       </div>
     </div>
 
@@ -485,7 +606,8 @@ function renderDashboard() {
         <div class="rc-breakdown-row"><span class="rbl">Inkomst</span><span class="rba" style="color:var(--success)">+ ${fmt(t.income)}</span></div>
         <div class="rc-breakdown-row"><span class="rbl">Fasta</span><span class="rba">− ${fmt(t.fixed)}</span></div>
         <div class="rc-breakdown-row"><span class="rbl">Rörliga</span><span class="rba">− ${fmt(t.variable)}</span></div>
-        ${periodicRow}
+        ${periodicPayRow}
+        ${periodicSaveRow}
       </div>
     </div>
 
@@ -493,6 +615,7 @@ function renderDashboard() {
       ${dashFixedCard()}
       ${dashPeriodicCard(yyyyMm)}
     </div>
+    ${dashAndreasCard()}
   `;
 }
 
@@ -524,30 +647,111 @@ function dashFixedCard() {
   `;
 }
 
+function dashAndreasCard() {
+  const fixedItems    = (md().fixed    || []).filter(i => i.splitWith);
+  const variableItems = (md().variable || []).filter(i => i.splitWith);
+  const allItems = [
+    ...fixedItems.map(i => ({ ...i, _amount: i.amount, _type: 'fixed' })),
+    ...variableItems.map(i => ({ ...i, _amount: i.budget, _type: 'variable' })),
+  ];
+  if (!allItems.length) return '';
+
+  const makeRow = (item) => {
+    const isFixed = item._type === 'fixed';
+    const cat = isFixed
+      ? (FIXED_CATEGORIES.find(c => c.id === item.category) || FIXED_CATEGORIES[0])
+      : (VARIABLE_CATEGORIES.find(c => c.id === item.category) || VARIABLE_CATEGORIES[0]);
+    const andreasShare = item.splitShare ?? 100;
+    const andreasAmount = item._amount * (andreasShare / 100);
+    const yourAmount    = item._amount - andreasAmount;
+    const andreasLaysOut = item.splitWith === 'andreas';
+    const rowBg = andreasLaysOut && yourAmount > 0
+      ? 'background:var(--danger-bg);'
+      : !andreasLaysOut && andreasAmount > 0
+        ? 'background:var(--success-bg);'
+        : '';
+    const payerLabel = andreasLaysOut ? 'Andreas lägger ut' : 'Du lägger ut';
+    const dest = isFixed ? 'fixed' : 'variable';
+    return `
+      <div class="item-row" style="cursor:pointer;${rowBg}" onclick="navigate('${dest}')">
+        <div class="item-icon" style="background:${cat.bg}">${cat.icon}</div>
+        <div class="item-info">
+          <div class="item-name">${h(item.name)}</div>
+          <div class="item-meta">${h(cat.label)} · ${payerLabel}${debitStr(item, state.month)}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;min-width:110px;">
+          <div style="font-size:12px;color:var(--success);font-weight:600;">Du: ${fmt(yourAmount)}</div>
+          <div style="font-size:12px;color:var(--primary);font-weight:600;">Andreas: ${fmt(andreasAmount)}</div>
+        </div>
+      </div>`;
+  };
+
+  const fixedRows    = fixedItems.length    ? `<div style="padding:6px 16px 2px;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">Fasta kostnader</div>${fixedItems.map(i => makeRow({ ...i, _amount: i.amount, _type: 'fixed' })).join('')}` : '';
+  const variableRows = variableItems.length ? `<div style="padding:6px 16px 2px;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">Rörliga kostnader</div>${variableItems.map(i => makeRow({ ...i, _amount: i.budget, _type: 'variable' })).join('')}` : '';
+
+  // splitShare = Andreas's share in %
+  // When you lay out (splitWith !== 'andreas'): Andreas owes you his share = splitShare%
+  // When Andreas lays out (splitWith === 'andreas'): you owe Andreas your share = (100 - splitShare)%
+  const andreasOwes = sum(allItems.filter(i => i.splitWith !== 'andreas'), i => i._amount * ((i.splitShare ?? 100) / 100));
+  const youOwe      = sum(allItems.filter(i => i.splitWith === 'andreas'),  i => i._amount * ((100 - (i.splitShare ?? 100)) / 100));
+  const net = youOwe - andreasOwes;
+  const summaryLabel = net > 0 ? 'Du är skyldig Andreas' : net < 0 ? 'Andreas är skyldig dig' : 'Ni är jämna';
+
+  const netColor = net > 0 ? 'var(--danger)' : net < 0 ? 'var(--success)' : 'var(--text-muted)';
+  return `
+    <div class="card" style="margin-top:20px;">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+        <h2>Delat med Andreas</h2>
+        <span style="font-size:13px;color:var(--text-muted)">denna månad</span>
+      </div>
+      <div class="item-list">${fixedRows}${variableRows}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-top:1px solid var(--border-light);font-weight:600;">
+        <span>${summaryLabel}</span>
+        <span style="color:${netColor};font-size:18px;">${fmt(Math.abs(net))}</span>
+      </div>
+    </div>`;
+}
+
 function dashPeriodicCard(yyyyMm) {
   if (!md().periodic.length) {
     return `<div class="card"><div class="card-header"><h2>Periodiska kostnader</h2></div><div class="item-list">${emptySmall('Inga periodiska kostnader')}</div></div>`;
   }
 
   const thisMonth = md().periodic.filter(i => i.paymentMonth && periodicFallsInMonth(i, yyyyMm));
-  const undated   = md().periodic.filter(i => !i.paymentMonth);
+  const undated = md().periodic.filter(i => !i.paymentMonth);
   const otherMonths = md().periodic.filter(i => i.paymentMonth && !periodicFallsInMonth(i, yyyyMm));
 
-  const makeRow = (item, amount, sub) => `
+  const makeRow = (item, monthlyAmount, sub) => `
     <div class="item-row" style="cursor:pointer;" onclick="navigate('periodic')" title="Visa periodiska kostnader">
       <div class="item-icon" style="background:var(--warning-bg)">📅</div>
       <div class="item-info">
         <div class="item-name">${h(item.name)}</div>
         <div class="item-meta">${sub}</div>
       </div>
-      <div class="item-amount amount-periodic">${fmt(amount)}</div>
+      <div class="item-amount amount-periodic">${fmt(monthlyAmount)}/mån</div>
     </div>`;
 
-  const thisRows   = thisMonth.map(i => makeRow(i, i.totalAmount,
-    `Förfaller denna månad · ${h(FREQ_LABELS[i.frequencyMonths] || 'periodiskt')}`)).join('');
-  const avgRows    = undated.map(i => makeRow(i, i.totalAmount / i.frequencyMonths,
-    `${fmt(i.totalAmount)} · ${h(FREQ_LABELS[i.frequencyMonths] || 'periodiskt')} · avsättning/mån`)).join('');
-  const otherRows  = otherMonths.map(i => {
+  const thisRows = thisMonth.map(i => {
+    let monthlyAmount;
+    if (i.frequencyType === 'days' && i.frequencyDays) {
+      monthlyAmount = (i.totalAmount / i.frequencyDays) * 30.44;
+    } else {
+      monthlyAmount = i.totalAmount / i.frequencyMonths;
+    }
+    return makeRow(i, monthlyAmount,
+      `BETALA NU: ${fmt(i.totalAmount)} · ${h(i.frequencyType === 'days' && i.frequencyDays ? 'var ' + i.frequencyDays + ':e dag' : FREQ_LABELS[i.frequencyMonths] || 'periodiskt')}`)
+  }).join('');
+  const avgRows = undated.map(i => {
+    let monthlyAmount;
+    if (i.frequencyType === 'days' && i.frequencyDays) {
+      monthlyAmount = (i.totalAmount / i.frequencyDays) * 30.44;
+    } else {
+      monthlyAmount = i.totalAmount / i.frequencyMonths;
+    }
+    return makeRow(i, monthlyAmount,
+      `${fmt(i.totalAmount)} · ${h(i.frequencyType === 'days' && i.frequencyDays ? 'var ' + i.frequencyDays + ':e dag' : FREQ_LABELS[i.frequencyMonths] || 'periodiskt')}`)
+  }).join('');
+  const otherRows = otherMonths.map(i => {
     const ny = i.paymentMonth.substring(0, 4), nm = i.paymentMonth.substring(5, 7);
     const [ty, tm] = yyyyMm.split('-').map(Number);
     const diff = (Number(ny) - ty) * 12 + (Number(nm) - tm);
@@ -556,14 +760,23 @@ function dashPeriodicCard(yyyyMm) {
     if (modsLeft === 0) modsLeft = i.frequencyMonths;
     const nextDate = new Date(ty, tm - 1 + modsLeft, 15);
     const nextLabel = new Intl.DateTimeFormat('sv-SE', { month: 'long', year: 'numeric' }).format(nextDate);
-    return makeRow(i, 0,
-      `Nästa gång: ${nextLabel} · ${fmt(i.totalAmount)} · ${h(FREQ_LABELS[i.frequencyMonths] || 'periodiskt')}`);
+
+    // Calculate monthly amount to set aside
+    let monthlyAmount;
+    if (i.frequencyType === 'days' && i.frequencyDays) {
+      monthlyAmount = (i.totalAmount / i.frequencyDays) * 30.44;
+    } else {
+      monthlyAmount = i.totalAmount / i.frequencyMonths;
+    }
+
+    return makeRow(i, monthlyAmount,
+      `Nästa: ${nextLabel} · ${fmt(i.totalAmount)} · ${h(i.frequencyType === 'days' && i.frequencyDays ? 'var ' + i.frequencyDays + ':e dag' : FREQ_LABELS[i.frequencyMonths] || 'periodiskt')}`);
   }).join('');
 
   const sections = [
-    thisRows && `<div class="dash-periodic-section"><div class="dash-periodic-label">📍 Förfaller denna månad</div>${thisRows}</div>`,
-    avgRows  && `<div class="dash-periodic-section"><div class="dash-periodic-label">📊 Löpande avsättning</div>${avgRows}</div>`,
-    otherRows && `<div class="dash-periodic-section"><div class="dash-periodic-label">🗓 Kommande månader</div>${otherRows}</div>`,
+    thisRows && `<div class="dash-periodic-section"><div class="dash-periodic-label">📍 Förfaller nu</div>${thisRows}</div>`,
+    avgRows && `<div class="dash-periodic-section"><div class="dash-periodic-label">📊 Löpande avsättning</div>${avgRows}</div>`,
+    otherRows && `<div class="dash-periodic-section"><div class="dash-periodic-label">🗓 Kommande</div>${otherRows}</div>`,
   ].filter(Boolean).join('');
 
   return `
@@ -646,29 +859,33 @@ function renderFixed() {
     return;
   }
   const m = md();
-  const total = sum(m.fixed, i => i.amount);
+  const total = sum(m.fixed, i => myShare(i.amount, i));
 
   const sections = FIXED_CATEGORIES.map(cat => {
     const items = m.fixed.filter(i => i.category === cat.id);
     if (!items.length) return '';
-    const catTotal = sum(items, i => i.amount);
+    const catTotal = sum(items, i => myShare(i.amount, i));
 
     const rows = items.map(item => {
       const PERSON_LABELS = { mig: '👤 Mig', elias: '👦 Elias', oliver: '👦 Oliver', zoe: '🐶 Zoe', ovrigt: '📦 Övrigt' };
-      const editFn      = item.type === 'mortgage' ? `editMortgage('${item.id}')` : `editFixed('${item.id}')`;
+      const editFn = item.type === 'mortgage' ? `editMortgage('${item.id}')` : `editFixed('${item.id}')`;
       const personBadge = item.person ? `<span class="badge badge-person">${h(PERSON_LABELS[item.person] ?? item.person)}</span>` : '';
-      const shareBadge  = (item.share && item.share < 100) ? `<span class="badge badge-share">${item.share}%</span>` : '';
+      const shareBadge = '';
       const fmtDate = s => s ? new Intl.DateTimeFormat('sv-SE', { day: 'numeric', month: 'short' }).format(new Date(s)) : null;
-      const fromLbl  = fmtDate(item.periodFrom);
-      const toLbl    = fmtDate(item.periodTo);
+      const fromLbl = fmtDate(item.periodFrom);
+      const toLbl = fmtDate(item.periodTo);
       const periodStr = fromLbl && toLbl ? ` · Avser ${fromLbl}–${toLbl}`
-                      : fromLbl          ? ` · Från ${fromLbl}`
-                      : toLbl            ? ` · Till ${toLbl}`
-                      : '';
+        : fromLbl ? ` · Från ${fromLbl}`
+          : toLbl ? ` · Till ${toLbl}`
+            : '';
       const companyStr = (!item.type && item.company) ? `${h(item.company)} · ` : '';
+      const dStr = debitStr(item, state.month);
+      const andreasBadge = item.splitWith
+        ? ` <span class="badge badge-andreas">${item.splitWith === 'andreas' ? 'Andreas lägger ut' : 'Delas'} · Andreas andel ${item.splitShare ?? 100}%</span>`
+        : '';
       const meta = item.type === 'mortgage'
-        ? `${Math.round(item.loanAmount / 1000)}\u00a0kkr · ${(item.listRate - (item.rateDiscount || 0)).toFixed(2)}% · ${item.taxMode === 'after' ? 'inkl. skatterabatt' : 'exkl. skatterabatt'}`
-        : `${companyStr}<span class="badge badge-${cat.id}">${h(cat.label)}</span> ${shareBadge} ${personBadge}${periodStr}`;
+        ? `${Math.round(item.loanAmount / 1000)}\u00a0kkr · ${(item.listRate - (item.rateDiscount || 0)).toFixed(2)}% · ${item.taxMode === 'after' ? 'inkl. skatterabatt' : 'exkl. skatterabatt'}${dStr}${andreasBadge}`
+        : `${companyStr}<span class="badge badge-${cat.id}">${h(cat.label)}</span> ${shareBadge} ${personBadge}${periodStr}${dStr}${andreasBadge}`;
       return `
         <div class="item-row">
           <div class="item-icon" style="background:${cat.bg}">${cat.icon}</div>
@@ -676,7 +893,7 @@ function renderFixed() {
             <div class="item-name">${h(item.name)}</div>
             <div class="item-meta">${meta}</div>
           </div>
-          <div class="item-amount amount-expense">${fmt(item.amount)}</div>
+          <div class="item-amount amount-expense">${fmt(myShare(item.amount, item))}</div>
           <div class="item-actions">
             <button class="btn-icon"        onclick="${editFn}"                         title="Redigera">${I.edit}</button>
             <button class="btn-icon danger" onclick="deleteItem('fixed','${item.id}')" title="Ta bort">${I.trash}</button>
@@ -733,31 +950,31 @@ function renderVariable() {
     return;
   }
   const m = md();
-  const total = sum(m.variable, i => i.budget);
+  const total = sum(m.variable, i => myShare(i.budget, i));
 
   const sections = VARIABLE_CATEGORIES.map(cat => {
     const items = m.variable.filter(i => i.category === cat.id);
     if (!items.length) return '';
-    const catTotal = sum(items, i => i.budget);
+    const catTotal = sum(items, i => myShare(i.budget, i));
 
     const rows = items.map(item => {
       const fmtDate = s => s ? new Intl.DateTimeFormat('sv-SE', { day: 'numeric', month: 'short' }).format(new Date(s)) : null;
       const fromLbl = fmtDate(item.periodFrom);
-      const toLbl   = fmtDate(item.periodTo);
+      const toLbl = fmtDate(item.periodTo);
       const PERIOD_TYPE_LABELS = { week: '1 vecka', '2week': '2 veckor', month: '1 månad' };
-      const periodMeta = item.periodType               ? ` · Avser ${PERIOD_TYPE_LABELS[item.periodType] ?? item.periodType}`
-                       : fromLbl && toLbl              ? ` · Avser ${fromLbl}–${toLbl}`
-                       : fromLbl                       ? ` · Fr\u00e5n ${fromLbl}`
-                       : toLbl                         ? ` · Till ${toLbl}`
-                       : '';
+      const periodMeta = item.periodType ? ` · Avser ${PERIOD_TYPE_LABELS[item.periodType] ?? item.periodType}`
+        : fromLbl && toLbl ? ` · Avser ${fromLbl}–${toLbl}`
+          : fromLbl ? ` · Fr\u00e5n ${fromLbl}`
+            : toLbl ? ` · Till ${toLbl}`
+              : '';
       return `
       <div class="item-row">
         <div class="item-icon" style="background:${cat.bg}">${cat.icon}</div>
         <div class="item-info">
           <div class="item-name">${h(item.name)}</div>
-          <div class="item-meta">${cat.label}${periodMeta}${item.note ? ' · ' + h(item.note) : ''}</div>
+          <div class="item-meta">${cat.label}${periodMeta}${item.note ? ' · ' + h(item.note) : ''}${debitStr(item, state.month)}${item.splitWith ? ` <span class="badge badge-andreas">${item.splitWith === 'andreas' ? 'Andreas lägger ut' : 'Delas'} · Andreas andel ${item.splitShare ?? 100}%</span>` : ''}</div>
         </div>
-        <div class="item-amount amount-expense">${fmt(item.budget)}</div>
+        <div class="item-amount amount-expense">${fmt(myShare(item.budget, item))}</div>
         <div class="item-actions">
           <button class="btn-icon"        onclick="editVariable('${item.id}')"           title="Redigera">${I.edit}</button>
           <button class="btn-icon danger" onclick="deleteItem('variable','${item.id}')" title="Ta bort">${I.trash}</button>
@@ -811,11 +1028,26 @@ function renderPeriodic() {
     return;
   }
   const m = md();
-  const monthlyTotal = sum(m.periodic, i => i.totalAmount / i.frequencyMonths);
+
+  function getMonthlyAmount(item) {
+    if (item.frequencyType === 'days' && item.frequencyDays) {
+      return (item.totalAmount / item.frequencyDays) * 30.44;
+    }
+    return item.totalAmount / item.frequencyMonths;
+  }
+
+  function getFreqLabel(item) {
+    if (item.frequencyType === 'days' && item.frequencyDays) {
+      return 'var ' + item.frequencyDays + ':e dag';
+    }
+    return FREQ_LABELS[item.frequencyMonths] || 'periodiskt';
+  }
+
+  const monthlyTotal = sum(m.periodic, i => getMonthlyAmount(i));
 
   const PERSON_LABELS = { mig: '👤 Mig', elias: '👦 Elias', oliver: '👦 Oliver', zoe: '🐶 Zoe', ovrigt: '📦 Övrigt' };
   const rows = m.periodic.map(item => {
-    const monthly = item.totalAmount / item.frequencyMonths;
+    const monthly = getMonthlyAmount(item);
     let nextInfo = '';
     if (item.paymentMonth) {
       const [ny, nm] = item.paymentMonth.split('-').map(Number);
@@ -833,9 +1065,10 @@ function renderPeriodic() {
         <div class="item-info">
           <div class="item-name">${h(item.name)}</div>
           <div class="item-meta">
-            ${fmt(item.totalAmount)} · ${h(FREQ_LABELS[item.frequencyMonths] || 'periodiskt')}${nextInfo}
+            ${fmt(item.totalAmount)} · ${getFreqLabel(item)}${nextInfo}
             ${(item.share && item.share < 100) ? ` · <span class="badge badge-share">${item.share}%</span>` : ''}
             ${item.note ? ' · ' + h(item.note) : ''}
+            ${debitStr(item, state.month)}
             ${item.person ? ` · <span class="badge badge-person">${h(PERSON_LABELS[item.person] ?? item.person)}</span>` : ''}
           </div>
         </div>
@@ -904,17 +1137,25 @@ function showModal(title, bodyHtml, onSave, extraClass = '') {
   modal.innerHTML = `
     <div class="modal-header">
       <h2>${h(title)}</h2>
-      <button class="modal-close" onclick="closeModal()" aria-label="Stäng">×</button>
+      <button type="button" class="modal-close" onclick="closeModal()" aria-label="Stäng">×</button>
     </div>
     <div class="modal-body">${bodyHtml}</div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal()">Avbryt</button>
-      <button class="btn btn-primary" id="modal-save">Spara</button>
+      <button type="button" class="btn btn-ghost" onclick="closeModal()">Avbryt</button>
+      <button type="button" class="btn btn-primary" id="modal-save">Spara</button>
     </div>
   `;
 
   document.getElementById('modal-save').onclick = onSave;
   overlay.classList.remove('hidden');
+
+  // Enter in any input/select triggers save (prevents default form submit + page scroll)
+  modal.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      onSave();
+    }
+  });
 
   // Focus first input
   setTimeout(() => { modal.querySelector('input, select')?.focus(); }, 60);
@@ -987,10 +1228,8 @@ function fixedForm(item) {
     `<option value="${c.id}" ${item?.category === c.id ? 'selected' : ''}>${c.icon} ${c.label}</option>`
   ).join('');
 
-  // When editing, back-calculate the entered amount from stored amount + share
-  const storedShare = item?.share ?? 100;
   const storedPeriod = item?.period ?? 'month';
-  const rawAmount = item ? Math.round(item.amount / (storedShare / 100) * (storedPeriod === 'year' ? 12 : 1)) : '';
+  const rawAmount = item ? Math.round(item.amount * (storedPeriod === 'year' ? 12 : 1)) : '';
 
   return `
     <div class="form-group">
@@ -1016,17 +1255,47 @@ function fixedForm(item) {
       </div>
     </div>
 
-    <div class="form-group">
-      <label class="form-label">Min andel (%)</label>
-      <div class="share-row">
-        <input type="range" id="f-share-range" min="1" max="100" step="1" value="${storedShare}" class="share-slider">
-        <input type="number" id="f-share" class="form-input share-input" min="1" max="100" step="1" value="${storedShare}">
-        <span class="share-pct-label">%</span>
-      </div>
-      <div class="form-hint">Sätt lägre än 100% om du delar kostnaden med någon.</div>
-    </div>
-
     <div id="fixed-preview" class="fixed-cost-preview" style="display:none;"></div>
+
+    <div class="form-group">
+      <label class="split-checkbox-label">
+        <input type="checkbox" id="f-split-toggle" ${item?.splitWith ? 'checked' : ''}
+          onchange="document.getElementById('f-split-panel').classList.toggle('split-panel-open', this.checked)">
+        <span>Delas med Andreas</span>
+      </label>
+    </div>
+    <div id="f-split-panel" class="split-panel ${item?.splitWith ? 'split-panel-open' : ''}">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label">Vem lägger ut?</label>
+        <div class="radio-group">
+          <label class="radio-label">
+            <input type="radio" name="split-payer" value="jag" ${(!item?.splitWith || item.splitWith !== 'andreas') ? 'checked' : ''}>
+            👤 Jag (Carro)
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="split-payer" value="andreas" ${item?.splitWith === 'andreas' ? 'checked' : ''}>
+            👤 Andreas
+          </label>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label">Andreas andel (%)</label>
+        <div class="share-row">
+          <input type="range" id="f-split-range" min="0" max="100" step="1"
+            value="${item?.splitShare ?? 100}" class="share-slider"
+            oninput="document.getElementById('f-split-share').value=this.value">
+          <input type="number" id="f-split-share" class="form-input share-input" min="0" max="100" step="1"
+            value="${item?.splitShare ?? 100}"
+            oninput="document.getElementById('f-split-range').value=this.value">
+          <span class="share-pct-label">%</span>
+        </div>
+        <div class="form-hint">Ange Andreas ekonomiska andel. 0% = du betalar allt, 50% = ni delar lika, 100% = han betalar allt.</div>
+        <div id="split-share-preview" style="margin-top:6px;font-size:13px;font-weight:600;display:flex;gap:16px;">
+          <span style="color:var(--success)">Du: <span id="split-my-pct">${100 - (item?.splitShare ?? 100)}</span>%</span>
+          <span style="color:var(--primary)">Andreas: <span id="split-andreas-pct">${item?.splitShare ?? 100}</span>%</span>
+        </div>
+      </div>
+    </div>
 
     <div class="form-row-2">
       <div class="form-group">
@@ -1053,6 +1322,7 @@ function fixedForm(item) {
       </div>
       <div class="form-hint">Valfritt – ange om kostnaden avser en specifik period.</div>
     </div>
+    ${debitDayHtml(item)}
   `;
 }
 
@@ -1061,45 +1331,51 @@ function attachFixedPreview() {
     function update() {
       const amount = parseFloat(document.getElementById('f-amount')?.value) || 0;
       const period = document.getElementById('f-period')?.value ?? 'month';
-      const share = parseFloat(document.getElementById('f-share')?.value) || 100;
       const preview = document.getElementById('fixed-preview');
       if (!preview) return;
 
-      // Sync range ↔ number
-      const rangeEl = document.getElementById('f-share-range');
-      if (rangeEl && document.activeElement !== rangeEl) rangeEl.value = share;
-
       if (amount > 0) {
         const monthly = period === 'year' ? amount / 12 : amount;
-        const myMonthly = monthly * (share / 100);
         const perYear = period === 'year' ? amount : amount * 12;
-        const myPerYear = perYear * (share / 100);
+
+        const splitEnabled = document.getElementById('f-split-toggle')?.checked;
+        const andreasSharePct = splitEnabled ? (v => isNaN(v) ? 100 : v)(parseInt(document.getElementById('f-split-share')?.value, 10)) : 0;
+        const mySharePct = 100 - andreasSharePct;
+        const myMonthly = monthly * mySharePct / 100;
+        const andreasMonthly = monthly * andreasSharePct / 100;
+
         preview.style.display = 'block';
         preview.innerHTML = `
           <div class="fcg-row"><span>Totalt ${period === 'year' ? 'per år' : 'per månad'}</span><span>${fmt(amount)}</span></div>
-          ${share < 100 ? `<div class="fcg-row"><span>Din andel (${share}%)</span><span>${fmt(myMonthly)}/mån · ${fmt(myPerYear)}/år</span></div>` : ''}
           <div class="fcg-row highlight"><span>Din månadskostnad</span><span>${fmt(myMonthly)}</span></div>
+          ${splitEnabled && andreasSharePct > 0 ? `<div class="fcg-row" style="color:var(--primary)"><span>Andreas andel</span><span>${fmt(andreasMonthly)}</span></div>` : ''}
+          ${period === 'year' ? '' : `<div class="fcg-row"><span>Per år (din andel)</span><span>${fmt(myMonthly * 12)}</span></div>`}
         `;
       } else {
         preview.style.display = 'none';
       }
     }
 
-    ['f-amount', 'f-period', 'f-share', 'f-share-range'].forEach(id => {
+    // Synka slider ↔ sifferfält för delning, och uppdatera preview vid ändring
+    const splitRange = document.getElementById('f-split-range');
+    const splitShare = document.getElementById('f-split-share');
+    function updateSharePct() {
+      const v = parseInt(splitShare?.value, 10) || 0;
+      const myPct = document.getElementById('split-my-pct');
+      const andreasPct = document.getElementById('split-andreas-pct');
+      if (myPct) myPct.textContent = 100 - v;
+      if (andreasPct) andreasPct.textContent = v;
+    }
+    if (splitRange && splitShare) {
+      splitRange.addEventListener('input', () => { splitShare.value = splitRange.value; update(); updateSharePct(); });
+      splitShare.addEventListener('input', () => { splitRange.value = splitShare.value; update(); updateSharePct(); });
+    }
+    document.getElementById('f-split-toggle')?.addEventListener('change', update);
+    document.querySelectorAll('input[name="split-payer"]').forEach(r => r.addEventListener('change', update));
+
+    ['f-amount', 'f-period'].forEach(id => {
       const el = document.getElementById(id);
-      if (!el) return;
-      el.addEventListener('input', () => {
-        // Keep range and number in sync
-        if (id === 'f-share-range') {
-          const n = document.getElementById('f-share');
-          if (n) n.value = el.value;
-        }
-        if (id === 'f-share') {
-          const r = document.getElementById('f-share-range');
-          if (r) r.value = el.value;
-        }
-        update();
-      });
+      if (el) el.addEventListener('input', update);
     });
     update();
   }, 80);
@@ -1108,24 +1384,28 @@ function attachFixedPreview() {
 function resolveFixedAmount() {
   const amount = parseFloat(document.getElementById('f-amount').value);
   const period = document.getElementById('f-period').value;
-  const share = parseFloat(document.getElementById('f-share').value) || 100;
   if (!(amount > 0)) return null;
   const monthly = period === 'year' ? amount / 12 : amount;
-  return { monthly: Math.round(monthly * (share / 100) * 100) / 100, period, share };
+  return { monthly: Math.round(monthly * 100) / 100, period };
 }
 
 function showAddFixed() {
   showModal('Lägg till fast kostnad', fixedForm(null), () => {
-    const name       = document.getElementById('f-name').value.trim();
-    const company    = document.getElementById('f-company').value.trim() || null;
-    const category   = document.getElementById('f-cat').value;
-    const person     = document.getElementById('f-person').value;
+    const name = document.getElementById('f-name').value.trim();
+    const company = document.getElementById('f-company').value.trim() || null;
+    const category = document.getElementById('f-cat').value;
+    const person = document.getElementById('f-person').value;
     const periodFrom = document.getElementById('f-period-from').value || null;
-    const periodTo   = document.getElementById('f-period-to').value || null;
-    const resolved   = resolveFixedAmount();
-    if (!name)     return notify('Ange ett namn.');
+    const periodTo = document.getElementById('f-period-to').value || null;
+    const debitDay = parseInt(document.getElementById('f-debit-day').value, 10) || null;
+    const debitMonthOffset = parseInt(document.getElementById('f-debit-offset').value, 10) || 0;
+    const splitEnabled = document.getElementById('f-split-toggle').checked;
+    const splitWith = splitEnabled ? (document.querySelector('input[name="split-payer"]:checked')?.value || 'jag') : null;
+    const splitShare = splitEnabled ? (v => isNaN(v) ? 100 : v)(parseInt(document.getElementById('f-split-share').value, 10)) : null;
+    const resolved = resolveFixedAmount();
+    if (!name) return notify('Ange ett namn.');
     if (!resolved) return notify('Ange ett giltigt belopp.');
-    ensureMonth().fixed.push({ id: genId(), name, company, amount: resolved.monthly, category, period: resolved.period, share: resolved.share, person, periodFrom, periodTo });
+    ensureMonth().fixed.push({ id: genId(), name, company, amount: resolved.monthly, category, period: resolved.period, person, periodFrom, periodTo, debitDay, debitMonthOffset, splitWith, splitShare });
     saveData(); closeModal(); renderFixed();
   });
   attachFixedPreview();
@@ -1135,18 +1415,21 @@ function editFixed(id) {
   const item = md().fixed.find(i => i.id === id);
   if (!item) return;
   showModal('Redigera fast kostnad', fixedForm(item), () => {
-    const name       = document.getElementById('f-name').value.trim();
-    const company    = document.getElementById('f-company').value.trim() || null;
-    const category   = document.getElementById('f-cat').value;
-    const resolved   = resolveFixedAmount();
-    const person     = document.getElementById('f-person').value;
+    const name = document.getElementById('f-name').value.trim();
+    const company = document.getElementById('f-company').value.trim() || null;
+    const category = document.getElementById('f-cat').value;
+    const resolved = resolveFixedAmount();
+    const person = document.getElementById('f-person').value;
     const periodFrom = document.getElementById('f-period-from').value || null;
-    const periodTo   = document.getElementById('f-period-to').value || null;
-    if (!name)     return notify('Ange ett namn.');
-    if (!resolved) return notify('Ange ett giltigt belopp.');
-    item.name = name; item.company = company; item.amount = resolved.monthly; item.category = category;
-    item.period = resolved.period; item.share = resolved.share; item.person = person;
-    item.periodFrom = periodFrom; item.periodTo = periodTo;
+    const periodTo = document.getElementById('f-period-to').value || null;
+    const debitDay = parseInt(document.getElementById('f-debit-day').value, 10) || null;
+    const debitMonthOffset = parseInt(document.getElementById('f-debit-offset').value, 10) || 0;
+    const splitEnabled = document.getElementById('f-split-toggle').checked;
+    const splitWith = splitEnabled ? (document.querySelector('input[name="split-payer"]:checked')?.value || 'jag') : null;
+    const splitShare = splitEnabled ? (v => isNaN(v) ? 100 : v)(parseInt(document.getElementById('f-split-share').value, 10)) : null;
+    item.period = resolved.period; item.person = person;
+    item.periodFrom = periodFrom; item.periodTo = periodTo; item.debitDay = debitDay; item.debitMonthOffset = debitMonthOffset;
+    item.splitWith = splitWith; item.splitShare = splitShare;
     saveData(); closeModal(); renderFixed();
   });
   attachFixedPreview();
@@ -1212,6 +1495,46 @@ function mortgageForm(item) {
         </label>
       </div>
     </div>
+    <div class="form-group">
+      <label class="split-checkbox-label">
+        <input type="checkbox" id="f-split-toggle" ${item?.splitWith ? 'checked' : ''}
+          onchange="document.getElementById('f-split-panel').classList.toggle('split-panel-open', this.checked)">
+        <span>Delas med Andreas</span>
+      </label>
+    </div>
+    <div id="f-split-panel" class="split-panel ${item?.splitWith ? 'split-panel-open' : ''}">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label">Vem lägger ut?</label>
+        <div class="radio-group">
+          <label class="radio-label">
+            <input type="radio" name="split-payer" value="jag" ${(!item?.splitWith || item.splitWith !== 'andreas') ? 'checked' : ''}>
+            👤 Jag (Carro)
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="split-payer" value="andreas" ${item?.splitWith === 'andreas' ? 'checked' : ''}>
+            👤 Andreas
+          </label>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label">Andreas andel (%)</label>
+        <div class="share-row">
+          <input type="range" id="f-split-range" min="0" max="100" step="1"
+            value="${item?.splitShare ?? 100}" class="share-slider"
+            oninput="document.getElementById('f-split-share').value=this.value">
+          <input type="number" id="f-split-share" class="form-input share-input" min="0" max="100" step="1"
+            value="${item?.splitShare ?? 100}"
+            oninput="document.getElementById('f-split-range').value=this.value">
+          <span class="share-pct-label">%</span>
+        </div>
+        <div class="form-hint">Ange Andreas ekonomiska andel. 0% = du betalar allt, 50% = ni delar lika, 100% = han betalar allt.</div>
+        <div id="split-share-preview" style="margin-top:6px;font-size:13px;font-weight:600;display:flex;gap:16px;">
+          <span style="color:var(--success)">Du: <span id="split-my-pct">${100 - (item?.splitShare ?? 100)}</span>%</span>
+          <span style="color:var(--primary)">Andreas: <span id="split-andreas-pct">${item?.splitShare ?? 100}</span>%</span>
+        </div>
+      </div>
+    </div>
+    ${debitDayHtml(item)}
   `;
 }
 
@@ -1279,6 +1602,11 @@ function showAddMortgage() {
     const bufferRate = parseFloat(document.getElementById('f-buffer').value) || 0;
     const downPayment = parseFloat(document.getElementById('f-downpayment').value) || 0;
     const taxMode = document.querySelector('input[name="tax-mode"]:checked')?.value || 'after';
+    const debitDay = parseInt(document.getElementById('f-debit-day').value, 10) || null;
+    const debitMonthOffset = parseInt(document.getElementById('f-debit-offset').value, 10) || 0;
+    const splitEnabled = document.getElementById('f-split-toggle').checked;
+    const splitWith = splitEnabled ? (document.querySelector('input[name="split-payer"]:checked')?.value || 'jag') : null;
+    const splitShare = splitEnabled ? (v => isNaN(v) ? 100 : v)(parseInt(document.getElementById('f-split-share').value, 10)) : null;
 
     if (!name) return notify('Ange ett namn.');
     if (!(loanAmount > 0)) return notify('Ange lånebelopp.');
@@ -1289,7 +1617,7 @@ function showAddMortgage() {
     const amount = Math.round(taxMode === 'after' ? c.totalAfterTax : c.totalBeforeTax);
     ensureMonth().fixed.push({
       id: genId(), name, category: 'lan', type: 'mortgage',
-      loanAmount, valuation, downPayment, listRate, rateDiscount, bufferRate, taxMode, amount,
+      loanAmount, valuation, downPayment, listRate, rateDiscount, bufferRate, taxMode, amount, debitDay, debitMonthOffset, splitWith, splitShare,
     });
     saveData(); closeModal(); renderFixed();
   }, 'wide');
@@ -1308,6 +1636,11 @@ function editMortgage(id) {
     const bufferRate = parseFloat(document.getElementById('f-buffer').value) || 0;
     const downPayment = parseFloat(document.getElementById('f-downpayment').value) || 0;
     const taxMode = document.querySelector('input[name="tax-mode"]:checked')?.value || 'after';
+    const debitDay = parseInt(document.getElementById('f-debit-day').value, 10) || null;
+    const debitMonthOffset = parseInt(document.getElementById('f-debit-offset').value, 10) || 0;
+    const splitEnabled = document.getElementById('f-split-toggle').checked;
+    const splitWith = splitEnabled ? (document.querySelector('input[name="split-payer"]:checked')?.value || 'jag') : null;
+    const splitShare = splitEnabled ? (v => isNaN(v) ? 100 : v)(parseInt(document.getElementById('f-split-share').value, 10)) : null;
 
     if (!name) return notify('Ange ett namn.');
     if (!(loanAmount > 0)) return notify('Ange lånebelopp.');
@@ -1316,7 +1649,7 @@ function editMortgage(id) {
 
     const c = calcMortgage(loanAmount, valuation, listRate, rateDiscount, bufferRate);
     const amount = Math.round(taxMode === 'after' ? c.totalAfterTax : c.totalBeforeTax);
-    Object.assign(item, { name, loanAmount, valuation, downPayment, listRate, rateDiscount, bufferRate, taxMode, amount });
+    Object.assign(item, { name, loanAmount, valuation, downPayment, listRate, rateDiscount, bufferRate, taxMode, amount, debitDay, debitMonthOffset, splitWith, splitShare });
     saveData(); closeModal(); renderFixed();
   }, 'wide');
   attachMortgagePreview();
@@ -1362,42 +1695,113 @@ function variableForm(item) {
       <label class="form-label">Kommentar <span style="font-weight:400;color:var(--text-light)">(valfritt)</span></label>
       <input type="text" id="f-note" class="form-input" placeholder="T.ex. extrakostnad, engång" value="${h(item?.note ?? '')}">
     </div>
+    <div class="form-group">
+      <label class="split-checkbox-label">
+        <input type="checkbox" id="f-split-toggle" ${item?.splitWith ? 'checked' : ''}
+          onchange="document.getElementById('f-split-panel').classList.toggle('split-panel-open', this.checked)">
+        <span>Delas med Andreas</span>
+      </label>
+    </div>
+    <div id="f-split-panel" class="split-panel ${item?.splitWith ? 'split-panel-open' : ''}">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label">Vem lägger ut?</label>
+        <div class="radio-group">
+          <label class="radio-label">
+            <input type="radio" name="split-payer" value="jag" ${(!item?.splitWith || item.splitWith !== 'andreas') ? 'checked' : ''}>
+            👤 Jag (Carro)
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="split-payer" value="andreas" ${item?.splitWith === 'andreas' ? 'checked' : ''}>
+            👤 Andreas
+          </label>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label">Andreas andel (%)</label>
+        <div class="share-row">
+          <input type="range" id="f-split-range" min="0" max="100" step="1"
+            value="${item?.splitShare ?? 100}" class="share-slider"
+            oninput="document.getElementById('f-split-share').value=this.value">
+          <input type="number" id="f-split-share" class="form-input share-input" min="0" max="100" step="1"
+            value="${item?.splitShare ?? 100}"
+            oninput="document.getElementById('f-split-range').value=this.value">
+          <span class="share-pct-label">%</span>
+        </div>
+        <div class="form-hint">Ange Andreas ekonomiska andel. 0% = du betalar allt, 50% = ni delar lika, 100% = han betalar allt.</div>
+        <div id="split-share-preview" style="margin-top:6px;font-size:13px;font-weight:600;display:flex;gap:16px;">
+          <span style="color:var(--success)">Du: <span id="split-my-pct">${100 - (item?.splitShare ?? 100)}</span>%</span>
+          <span style="color:var(--primary)">Andreas: <span id="split-andreas-pct">${item?.splitShare ?? 100}</span>%</span>
+        </div>
+      </div>
+    </div>
+    ${debitDayHtml(item)}
   `;
 }
 
 function showAddVariable() {
   showModal('Lägg till rörlig kostnad', variableForm(null), () => {
-    const name       = document.getElementById('f-name').value.trim();
-    const budget     = parseFloat(document.getElementById('f-budget').value);
-    const category   = document.getElementById('f-cat').value;
+    const name = document.getElementById('f-name').value.trim();
+    const budget = parseFloat(document.getElementById('f-budget').value);
+    const category = document.getElementById('f-cat').value;
     const periodType = document.getElementById('f-period-type').value || null;
     const periodFrom = document.getElementById('f-period-from').value || null;
-    const periodTo   = document.getElementById('f-period-to').value || null;
-    const note       = document.getElementById('f-note').value.trim() || null;
-    if (!name)         return notify('Ange ett namn.');
+    const periodTo = document.getElementById('f-period-to').value || null;
+    const note = document.getElementById('f-note').value.trim() || null;
+    const debitDay = parseInt(document.getElementById('f-debit-day').value, 10) || null;
+    const debitMonthOffset = parseInt(document.getElementById('f-debit-offset').value, 10) || 0;
+    const splitEnabled = document.getElementById('f-split-toggle').checked;
+    const splitWith = splitEnabled ? (document.querySelector('input[name="split-payer"]:checked')?.value || 'jag') : null;
+    const splitShare = splitEnabled ? (v => isNaN(v) ? 100 : v)(parseInt(document.getElementById('f-split-share').value, 10)) : null;
+    if (!name) return notify('Ange ett namn.');
     if (!(budget > 0)) return notify('Ange ett giltigt belopp.');
-    ensureMonth().variable.push({ id: genId(), name, budget, category, periodType, periodFrom, periodTo, note });
+    ensureMonth().variable.push({ id: genId(), name, budget, category, periodType, periodFrom, periodTo, note, debitDay, debitMonthOffset, splitWith, splitShare });
     saveData(); closeModal(); renderVariable();
   });
+  attachVariableSplitSync();
 }
 
 function editVariable(id) {
   const item = md().variable.find(i => i.id === id);
   if (!item) return;
   showModal('Redigera rörlig kostnad', variableForm(item), () => {
-    const name       = document.getElementById('f-name').value.trim();
-    const budget     = parseFloat(document.getElementById('f-budget').value);
-    const category   = document.getElementById('f-cat').value;
+    const name = document.getElementById('f-name').value.trim();
+    const budget = parseFloat(document.getElementById('f-budget').value);
+    const category = document.getElementById('f-cat').value;
     const periodType = document.getElementById('f-period-type').value || null;
     const periodFrom = document.getElementById('f-period-from').value || null;
-    const periodTo   = document.getElementById('f-period-to').value || null;
-    const note       = document.getElementById('f-note').value.trim() || null;
-    if (!name)         return notify('Ange ett namn.');
+    const periodTo = document.getElementById('f-period-to').value || null;
+    const note = document.getElementById('f-note').value.trim() || null;
+    const debitDay = parseInt(document.getElementById('f-debit-day').value, 10) || null;
+    const debitMonthOffset = parseInt(document.getElementById('f-debit-offset').value, 10) || 0;
+    const splitEnabled = document.getElementById('f-split-toggle').checked;
+    const splitWith = splitEnabled ? (document.querySelector('input[name="split-payer"]:checked')?.value || 'jag') : null;
+    const splitShare = splitEnabled ? (v => isNaN(v) ? 100 : v)(parseInt(document.getElementById('f-split-share').value, 10)) : null;
+    if (!name) return notify('Ange ett namn.');
     if (!(budget > 0)) return notify('Ange ett giltigt belopp.');
     item.name = name; item.budget = budget; item.category = category;
-    item.periodType = periodType; item.periodFrom = periodFrom; item.periodTo = periodTo; item.note = note;
+    item.periodType = periodType; item.periodFrom = periodFrom; item.periodTo = periodTo; item.note = note; item.debitDay = debitDay; item.debitMonthOffset = debitMonthOffset;
+    item.splitWith = splitWith; item.splitShare = splitShare;
     saveData(); closeModal(); renderVariable();
   });
+  attachVariableSplitSync();
+}
+
+function attachVariableSplitSync() {
+  setTimeout(() => {
+    const splitRange = document.getElementById('f-split-range');
+    const splitShare = document.getElementById('f-split-share');
+    function updateSharePct() {
+      const v = parseInt(splitShare?.value, 10) || 0;
+      const myPct = document.getElementById('split-my-pct');
+      const andreasPct = document.getElementById('split-andreas-pct');
+      if (myPct) myPct.textContent = 100 - v;
+      if (andreasPct) andreasPct.textContent = v;
+    }
+    if (splitRange && splitShare) {
+      splitRange.addEventListener('input', () => { splitShare.value = splitRange.value; updateSharePct(); });
+      splitShare.addEventListener('input', () => { splitRange.value = splitShare.value; updateSharePct(); });
+    }
+  }, 80);
 }
 
 /* =============================================
@@ -1405,9 +1809,19 @@ function editVariable(id) {
    ============================================= */
 
 function periodicForm(item) {
-  const freqOptions = [1, 2, 3, 4, 6, 12, 24].map(m =>
-    `<option value="${m}" ${item?.frequencyMonths === m ? 'selected' : m === 3 && !item ? 'selected' : ''}>${FREQ_LABELS[m]}</option>`
-  ).join('');
+  const isCustomDays = item?.frequencyType === 'days';
+  const freqOptions = `
+    <option value="1" ${item?.frequencyMonths === 1 && !isCustomDays ? 'selected' : ''}>varje månad</option>
+    <option value="2" ${item?.frequencyMonths === 2 ? 'selected' : ''}>varannan månad</option>
+    <option value="3" ${item?.frequencyMonths === 3 && !isCustomDays ? 'selected' : ''}>var 3:e månad</option>
+    <option value="4" ${item?.frequencyMonths === 4 && !isCustomDays ? 'selected' : ''}>var 4:e månad</option>
+    <option value="6" ${item?.frequencyMonths === 6 ? 'selected' : ''}>var 6:e månad</option>
+    <option value="12" ${item?.frequencyMonths === 12 && !isCustomDays ? 'selected' : ''}>en gång per år</option>
+    <option value="24" ${item?.frequencyMonths === 24 ? 'selected' : ''}>vartannat år</option>
+    <option value="custom" ${isCustomDays ? 'selected' : ''}>egen (antal dagar)</option>
+  `.replace(/\n/g, '');
+
+  const customDaysVal = item?.frequencyDays || '';
 
   return `
     <div class="form-group">
@@ -1421,6 +1835,9 @@ function periodicForm(item) {
     <div class="form-group">
       <label class="form-label">Hur ofta?</label>
       <select id="f-freq" class="form-select">${freqOptions}</select>
+      <div id="custom-days-group" style="margin-top:8px;${isCustomDays ? '' : 'display:none;'}">
+        <input type="number" id="f-days" class="form-input" placeholder="Antal dagar" min="1" value="${customDaysVal}">
+      </div>
     </div>
     <div class="form-group">
       <label class="form-label">Min andel (%)</label>
@@ -1450,6 +1867,7 @@ function periodicForm(item) {
       <label class="form-label">Anteckning <span style="font-weight:400;color:var(--text-light)">(valfritt)</span></label>
       <input type="text" id="f-note" class="form-input" placeholder="T.ex. kvartal, period" value="${h(item?.note ?? '')}">
     </div>
+    ${debitDayHtml(item)}
     <div class="calc-preview" id="calc-preview">
       Sätt undan <span id="calc-amount">–</span> per månad
     </div>
@@ -1460,6 +1878,8 @@ function attachPeriodicPreview() {
   setTimeout(() => {
     const amountEl = document.getElementById('f-amount');
     const freqEl = document.getElementById('f-freq');
+    const daysGroup = document.getElementById('custom-days-group');
+    const daysEl = document.getElementById('f-days');
     const previewEl = document.getElementById('calc-preview');
     const spanEl = document.getElementById('calc-amount');
     if (!amountEl || !freqEl) return;
@@ -1473,11 +1893,29 @@ function attachPeriodicPreview() {
 
     function update() {
       const a = parseFloat(amountEl.value);
-      const f = parseInt(freqEl.value, 10);
+      const f = freqEl.value;
       const s = parseFloat(document.getElementById('f-share')?.value) || 100;
-      if (a > 0 && f > 0) {
-        previewEl.style.display = 'block';
-        spanEl.textContent = fmt(a * (s / 100) / f);
+      const isCustom = f === 'custom';
+      const days = parseInt(daysEl?.value, 10);
+
+      if (daysGroup) {
+        daysGroup.style.display = isCustom ? 'block' : 'none';
+      }
+
+      if (a > 0) {
+        let monthly;
+        if (isCustom && days > 0) {
+          monthly = (a * (s / 100) / days) * 30.44;
+        } else if (!isCustom && parseInt(f, 10) > 0) {
+          monthly = a * (s / 100) / parseInt(f, 10);
+        }
+
+        if (monthly !== undefined) {
+          previewEl.style.display = 'block';
+          spanEl.textContent = fmt(monthly);
+        } else {
+          previewEl.style.display = 'none';
+        }
       } else {
         previewEl.style.display = 'none';
       }
@@ -1485,23 +1923,39 @@ function attachPeriodicPreview() {
 
     amountEl.addEventListener('input', update);
     freqEl.addEventListener('change', update);
+    if (daysEl) daysEl.addEventListener('input', update);
     update(); // Run once in case editing existing item
   }, 80);
 }
 
 function showAddPeriodic() {
   showModal('Lägg till periodisk kostnad', periodicForm(null), () => {
-    const name           = document.getElementById('f-name').value.trim();
-    const totalAmount    = parseFloat(document.getElementById('f-amount').value);
-    const frequencyMonths = parseInt(document.getElementById('f-freq').value, 10);
-    const share          = parseFloat(document.getElementById('f-share').value) || 100;
-    const paymentMonth   = document.getElementById('f-payment-month').value || null;
-    const note           = document.getElementById('f-note').value.trim();
-    const person         = document.getElementById('f-person').value;
+    const name = document.getElementById('f-name').value.trim();
+    const totalAmount = parseFloat(document.getElementById('f-amount').value);
+    const freqVal = document.getElementById('f-freq').value;
+    const share = parseFloat(document.getElementById('f-share').value) || 100;
+    const paymentMonth = document.getElementById('f-payment-month').value || null;
+    const note = document.getElementById('f-note').value.trim();
+    const person = document.getElementById('f-person').value;
+    const debitDay = parseInt(document.getElementById('f-debit-day').value, 10) || null;
+    const debitMonthOffset = parseInt(document.getElementById('f-debit-offset').value, 10) || 0;
     if (!name) return notify('Ange ett namn.');
     if (!(totalAmount > 0)) return notify('Ange ett giltigt belopp.');
+
+    let frequencyMonths, frequencyDays, frequencyType;
+    if (freqVal === 'custom') {
+      frequencyDays = parseInt(document.getElementById('f-days').value, 10);
+      if (!frequencyDays || frequencyDays < 1) return notify('Ange antal dagar.');
+      frequencyMonths = Math.round(frequencyDays / 30.44);
+      frequencyType = 'days';
+    } else {
+      frequencyMonths = parseInt(freqVal, 10);
+      frequencyDays = null;
+      frequencyType = 'months';
+    }
+
     const myAmount = Math.round(totalAmount * (share / 100) * 100) / 100;
-    ensureMonth().periodic.push({ id: genId(), name, totalAmount: myAmount, share, frequencyMonths, paymentMonth, note, person });
+    ensureMonth().periodic.push({ id: genId(), name, totalAmount: myAmount, share, frequencyMonths, frequencyDays, frequencyType, paymentMonth, note, person, debitDay, debitMonthOffset });
     saveData(); closeModal(); renderPeriodic();
   });
   attachPeriodicPreview();
@@ -1511,18 +1965,42 @@ function editPeriodic(id) {
   const item = md().periodic.find(i => i.id === id);
   if (!item) return;
   showModal('Redigera periodisk kostnad', periodicForm(item), () => {
-    const name           = document.getElementById('f-name').value.trim();
-    const totalAmount    = parseFloat(document.getElementById('f-amount').value);
-    const frequencyMonths = parseInt(document.getElementById('f-freq').value, 10);
-    const share          = parseFloat(document.getElementById('f-share').value) || 100;
-    const paymentMonth   = document.getElementById('f-payment-month').value || null;
-    const note           = document.getElementById('f-note').value.trim();
-    const person         = document.getElementById('f-person').value;
+    const name = document.getElementById('f-name').value.trim();
+    const totalAmount = parseFloat(document.getElementById('f-amount').value);
+    const freqVal = document.getElementById('f-freq').value;
+    const share = parseFloat(document.getElementById('f-share').value) || 100;
+    const paymentMonth = document.getElementById('f-payment-month').value || null;
+    const note = document.getElementById('f-note').value.trim();
+    const person = document.getElementById('f-person').value;
+    const debitDay = parseInt(document.getElementById('f-debit-day').value, 10) || null;
+    const debitMonthOffset = parseInt(document.getElementById('f-debit-offset').value, 10) || 0;
     if (!name) return notify('Ange ett namn.');
     if (!(totalAmount > 0)) return notify('Ange ett giltigt belopp.');
+
+    let frequencyMonths, frequencyDays, frequencyType;
+    if (freqVal === 'custom') {
+      frequencyDays = parseInt(document.getElementById('f-days').value, 10);
+      if (!frequencyDays || frequencyDays < 1) return notify('Ange antal dagar.');
+      frequencyMonths = Math.round(frequencyDays / 30.44);
+      frequencyType = 'days';
+    } else {
+      frequencyMonths = parseInt(freqVal, 10);
+      frequencyDays = null;
+      frequencyType = 'months';
+    }
+
     const myAmount = Math.round(totalAmount * (share / 100) * 100) / 100;
-    item.name = name; item.totalAmount = myAmount; item.share = share;
-    item.frequencyMonths = frequencyMonths; item.paymentMonth = paymentMonth; item.note = note; item.person = person;
+    item.name = name;
+    item.totalAmount = myAmount;
+    item.share = share;
+    item.frequencyMonths = frequencyMonths;
+    item.frequencyDays = frequencyDays;
+    item.frequencyType = frequencyType;
+    item.paymentMonth = paymentMonth;
+    item.note = note;
+    item.person = person;
+    item.debitDay = debitDay;
+    item.debitMonthOffset = debitMonthOffset;
     saveData(); closeModal(); renderPeriodic();
   });
   attachPeriodicPreview();
@@ -1600,6 +2078,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }, 8000);
 
   db.auth.onAuthStateChange(async (event, session) => {
+    // INITIAL_SESSION  = sidan laddas (session finns eller saknas)
+    // SIGNED_IN        = bara vid faktisk ny inloggning (inte token-refresh i v2)
+    // SIGNED_OUT       = användaren loggade ut
+    // TOKEN_REFRESHED / USER_UPDATED / MFA_CHALLENGE_VERIFIED → ignoreras
+    if (event !== 'INITIAL_SESSION' && event !== 'SIGNED_IN' && event !== 'SIGNED_OUT') return;
+
+    // Om appen redan är igång och det bara är en SIGNED_IN från token-refresh, ignorera
+    if (appInitialized && event === 'SIGNED_IN') return;
+
     clearTimeout(authTimeout);
     const loadingEl = document.getElementById('loading-screen');
     const loginEl = document.getElementById('login-screen');
@@ -1608,7 +2095,6 @@ document.addEventListener('DOMContentLoaded', () => {
       state.userId = session.user.id;
       loginEl.classList.add('hidden');
       try {
-        // Max 8 s på att hämta data – annars startar appen med tomt state
         await Promise.race([
           loadData(),
           new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
@@ -1621,6 +2107,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       state.userId = null;
       state.data = newData();
+      appInitialized = false;
       if (loadingEl) loadingEl.classList.add('hidden');
       loginEl.classList.remove('hidden');
     }

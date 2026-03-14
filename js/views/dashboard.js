@@ -92,23 +92,47 @@ function dashFixedCard() {
 }
 
 function dashPeriodicCard() {
+  function getMonthlyAmount(item) {
+    if (item.frequencyType === 'days' && item.frequencyDays) {
+      return (item.totalAmount / item.frequencyDays) * 30.44;
+    }
+    return item.totalAmount / item.frequencyMonths;
+  }
+  
+  function getFreqLabel(item) {
+    if (item.frequencyType === 'days' && item.frequencyDays) {
+      return 'var ' + item.frequencyDays + ':e dag';
+    }
+    return FREQ_LABELS[item.frequencyMonths] || 'periodiskt';
+  }
+  
   const rows = state.data.periodic.map(item => {
-    const monthly = item.totalAmount / item.frequencyMonths;
+    const monthly = getMonthlyAmount(item);
+    const available = calcPeriodicAvailable(item);
+    const canWithdraw = available > 0;
     return `
       <div class="item-row" style="cursor:default;">
         <div class="item-icon" style="background:var(--warning-bg)">📅</div>
         <div class="item-info">
           <div class="item-name">${h(item.name)}</div>
-          <div class="item-meta">${fmt(item.totalAmount)} · ${h(FREQ_LABELS[item.frequencyMonths] || 'periodiskt')}</div>
+          <div class="item-meta">${fmt(item.totalAmount)} · ${getFreqLabel(item)}</div>
         </div>
         <div class="item-amount amount-periodic">${fmt(monthly)}/mån</div>
+        ${canWithdraw ? `
+        <div class="item-amount" style="color:var(--success);font-weight:600;">${fmt(available)}</div>
+        ` : ''}
       </div>
     `;
   }).join('');
 
+  const availableTotal = sum(state.data.periodic, i => calcPeriodicAvailable(i));
+
   return `
     <div class="card">
-      <div class="card-header"><h2>Periodiska kostnader</h2></div>
+      <div class="card-header">
+        <h2>Periodiska kostnader</h2>
+        ${availableTotal > 0 ? `<span style="color:var(--success);font-weight:600;">${fmt(availableTotal)} tillgängligt</span>` : ''}
+      </div>
       <div class="item-list">
         ${rows || emptySmall('Inga periodiska kostnader')}
       </div>
