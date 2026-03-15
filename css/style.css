@@ -3,6 +3,7 @@
    ============================================= */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+.hidden { display: none !important; }
 
 :root {
   --primary:        #4F6BED;
@@ -43,7 +44,7 @@
   --shadow-md:      0 4px 6px -1px rgba(0,0,0,.08), 0 2px 4px -1px rgba(0,0,0,.05);
   --shadow-lg:      0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -2px rgba(0,0,0,.05);
 
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
   font-size: 14px;
   color: var(--text);
   line-height: 1.5;
@@ -53,6 +54,10 @@ body {
   background: var(--bg);
   min-height: 100vh;
   display: flex;
+}
+
+*, *::before, *::after {
+  font-family: inherit;
 }
 
 /* ---- Scrollbar ---- */
@@ -82,15 +87,136 @@ body {
   height: var(--header-h);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 4px;
   padding: 0 20px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
-.brand-icon { font-size: 22px; line-height: 1; }
-.brand-name { font-size: 16px; font-weight: 700; color: var(--text); letter-spacing: -.01em; }
+.brand-logo { width: 38px; height: 38px; flex-shrink: 0; }
+.brand-name { font-size: 18px; font-weight: 800; color: #1a2f5a; letter-spacing: -.02em; }
 
+/* =============================================
+   SIDEBAR SEARCH
+   ============================================= */
+.sidebar-search {
+  position: relative;
+  padding: 10px 10px 4px;
+  flex-shrink: 0;
+}
+
+.sidebar-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 28px 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  transition: border-color .15s;
+}
+
+.sidebar-search-input:focus {
+  border-color: var(--primary);
+}
+
+.sidebar-search-clear {
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 50%;
+  transition: color .12s, background .12s;
+}
+
+.sidebar-search-clear:hover {
+  color: var(--text);
+  background: var(--border-light);
+}
+
+.sidebar-search-results {
+  position: absolute;
+  top: calc(100% - 4px);
+  left: 10px;
+  right: 10px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 20px rgba(0,0,0,.12);
+  z-index: 200;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.search-result-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-light);
+  transition: background .1s;
+}
+
+.search-result-item:last-child { border-bottom: none; }
+.search-result-item:hover { background: var(--primary-light); }
+
+.search-result-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.search-result-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.search-result-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-result-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-result-amount {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.search-no-results {
+  padding: 16px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* =============================================
+   NAV LINKS
+   ============================================= */
 .nav-links {
   list-style: none;
   padding: 12px 10px;
@@ -471,6 +597,18 @@ body {
 .badge-share      { background: #FFF7ED; color: #C2410C; }
 .badge-andreas    { background: #EFF6FF; color: #1E40AF; }
 
+/* Search highlight animation */
+@keyframes search-highlight-fade {
+  0%   { background: var(--primary-light); }
+  80%  { background: var(--primary-light); }
+  100% { background: transparent; }
+}
+
+.search-highlight {
+  animation: search-highlight-fade 1.8s ease forwards;
+  border-radius: var(--radius-sm);
+}
+
 /* Split-with-Andreas form block */
 .split-checkbox-label {
   display: flex;
@@ -838,7 +976,8 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 .radio-label:hover { border-color: var(--primary); }
 .radio-label input[type="radio"] { accent-color: var(--primary); flex-shrink: 0; }
 
-#modal.wide { max-width: 560px; }
+#modal.wide   { max-width: 560px; }
+#modal.modal-narrow { max-width: 360px; }
 
 /* =============================================
    RESPONSIVE — Mobile

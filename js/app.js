@@ -257,20 +257,36 @@ function calcMonthTotals(yyyyMm) {
 
   // Calculate total monthly savings for ALL periodic items (not just undated)
   const periodicMonthlySavings = sum(m.periodic, i => {
+    const myAmount = i.totalAmount * ((i.share ?? 100) / 100);
     if (i.frequencyType === 'days' && i.frequencyDays) {
-      return (i.totalAmount / i.frequencyDays) * 30.44;
+      return (myAmount / i.frequencyDays) * 30.44;
     }
-    return i.totalAmount / i.frequencyMonths;
+    return myAmount / i.frequencyMonths;
   });
 
   // What's due this month specifically
   const datedItems = m.periodic.filter(i => i.paymentMonth);
-  const periodicThisMonth = sum(datedItems.filter(i => periodicFallsInMonth(i, yyyyMm)), i => i.totalAmount);
+  const periodicThisMonth = sum(datedItems.filter(i => periodicFallsInMonth(i, yyyyMm)), i => i.totalAmount * ((i.share ?? 100) / 100));
 
   // Total: only count the monthly savings (not both)
   const totalOut = fixed + variable + periodicMonthlySavings;
-  const remaining = income - totalOut;
-  return { income, fixed, variable, periodicThisMonth, periodicAverage: periodicMonthlySavings, totalOut, remaining };
+  const andreasNet = calcAndreasNet(m); // positive = you owe Andreas
+  const remaining = income - totalOut - Math.max(0, andreasNet);
+  return { income, fixed, variable, periodicThisMonth, periodicAverage: periodicMonthlySavings, totalOut, andreasNet, remaining };
+}
+
+// Returns the net amount owed between Carro and Andreas for a given month's data.
+// Positive = Carro owes Andreas, negative = Andreas owes Carro.
+function calcAndreasNet(m) {
+  const fixedItems = (m.fixed || []).filter(i => i.splitWith);
+  const variableItems = (m.variable || []).filter(i => i.splitWith);
+  const allItems = [
+    ...fixedItems.map(i => ({ splitWith: i.splitWith, splitShare: i.splitShare, _amount: i.amount })),
+    ...variableItems.map(i => ({ splitWith: i.splitWith, splitShare: i.splitShare, _amount: i.budget })),
+  ];
+  const andreasOwes = sum(allItems.filter(i => i.splitWith !== 'andreas'), i => i._amount * ((i.splitShare ?? 100) / 100));
+  const youOwe = sum(allItems.filter(i => i.splitWith === 'andreas'), i => i._amount * ((100 - (i.splitShare ?? 100)) / 100));
+  return youOwe - andreasOwes;
 }
 
 function sum(arr, fn) {
@@ -297,7 +313,7 @@ function debitDayHtml(item) {
         </div>
         <div>
           <select id="f-debit-offset" class="form-select">
-            <option value="0"  ${off === 0  ? 'selected' : ''}>Samma månad</option>
+            <option value="0"  ${off === 0 ? 'selected' : ''}>Samma månad</option>
             <option value="-1" ${off === -1 ? 'selected' : ''}>Månaden innan</option>
             <option value="-2" ${off === -2 ? 'selected' : ''}>2 månader innan</option>
           </select>
@@ -433,9 +449,26 @@ function copyFromMonth(fromMonth) {
   const source = state.data.months[fromMonth];
   if (!source) return;
   const copy = JSON.parse(JSON.stringify(source));
-  ['income', 'fixed', 'variable', 'periodic'].forEach(k => {
+  const [ty, tm] = state.month.split('-').map(Number);
+
+  ['income', 'fixed', 'variable'].forEach(k => {
     copy[k] = copy[k].map(item => ({ ...item, id: genId() }));
   });
+
+  // For periodic items: advance paymentMonth to next occurrence on or after toMonth
+  copy.periodic = copy.periodic.map(item => {
+    item = { ...item, id: genId() };
+    if (!item.paymentMonth || !item.frequencyMonths) return item;
+    const [py, pm] = item.paymentMonth.split('-').map(Number);
+    const diff = (ty - py) * 12 + (tm - pm);
+    if (diff <= 0) return item;
+    const cyclesNeeded = Math.ceil(diff / item.frequencyMonths);
+    const newMonthsAhead = cyclesNeeded * item.frequencyMonths;
+    const newDate = new Date(py, pm - 1 + newMonthsAhead, 15);
+    item.paymentMonth = fmtYYYYMM(newDate);
+    return item;
+  });
+
   state.data.months[state.month] = copy;
   saveData(); render();
 }
@@ -452,11 +485,32 @@ function clearCurrentMonth() {
     return;
   }
 
+  // Safety: block deletion if this is the only month with data
+  const monthsWithData = Object.keys(state.data.months).filter(key => {
+    const md = state.data.months[key];
+    return (md.income?.length || 0) + (md.fixed?.length || 0) +
+           (md.variable?.length || 0) + (md.periodic?.length || 0) > 0;
+  });
+  if (monthsWithData.length === 1 && monthsWithData[0] === m) {
+    const label = new Date(m + '-15').toLocaleDateString('sv-SE', { month: 'long', year: 'numeric' });
+    showModal('Kan inte tömma månad', `
+      <p style="margin-bottom:16px;"><strong>${label}</strong> är den enda månaden med data.</p>
+      <p style="color:var(--text-light);font-size:14px;margin-bottom:20px;">
+        Du kan inte ta bort den sista månaden med data. Kopiera den till en ny månad först.
+      </p>
+      <div style="display:flex;justify-content:flex-end;">
+        <button class="btn" onclick="closeModal()">OK</button>
+      </div>
+    `, () => {});
+    return;
+  }
+
   const monthData = state.data.months[m];
   const incomeCount = monthData.income?.length || 0;
   const fixedCount = monthData.fixed?.length || 0;
   const variableCount = monthData.variable?.length || 0;
-  const totalCount = incomeCount + fixedCount + variableCount;
+  const periodicCount = monthData.periodic?.length || 0;
+  const totalCount = incomeCount + fixedCount + variableCount + periodicCount;
 
   if (totalCount === 0) {
     notify('Det finns inga poster att ta bort för denna månad.');
@@ -468,7 +522,7 @@ function clearCurrentMonth() {
   showModal('Töm månad', `
     <p style="margin-bottom:16px;">Vill du verkligen ta bort alla poster för <strong>${label}</strong>?</p>
     <p style="color:var(--text-light);font-size:14px;margin-bottom:20px;">
-      ${incomeCount} inkomster, ${fixedCount} fasta kostnader, ${variableCount} rörliga kostnader kommer att raderas.
+      ${incomeCount} inkomster, ${fixedCount} fasta kostnader, ${variableCount} rörliga kostnader, ${periodicCount} periodiska kostnader kommer att raderas.
     </p>
     <div style="display:flex;gap:12px;">
       <button class="btn" onclick="closeModal()" style="flex:1;">Avbryt</button>
@@ -554,6 +608,11 @@ function renderDashboard() {
       <span class="rbl">Periodiskt att spara</span>
       <span class="rba">− ${fmt(t.periodicAverage)}</span>
     </div>` : '';
+  const andreasRow = t.andreasNet > 0 ? `
+    <div class="rc-breakdown-row">
+      <span class="rbl">Skuld till Andreas</span>
+      <span class="rba">− ${fmt(t.andreasNet)}</span>
+    </div>` : '';
 
   el.innerHTML = `
     <div class="view-header">
@@ -592,7 +651,7 @@ function renderDashboard() {
       <div class="summary-card" style="cursor:pointer;background:var(--warning-bg);" onclick="navigate('periodic')">
         <div class="s-label" style="color:var(--warning)">Periodiskt att spara</div>
         <div class="s-amount" style="color:var(--warning)">${fmt(t.periodicAverage)}</div>
-        <div class="s-sub">per månad</div>
+        <div class="s-sub">denna månad</div>
       </div>
     </div>
 
@@ -608,6 +667,7 @@ function renderDashboard() {
         <div class="rc-breakdown-row"><span class="rbl">Rörliga</span><span class="rba">− ${fmt(t.variable)}</span></div>
         ${periodicPayRow}
         ${periodicSaveRow}
+        ${andreasRow}
       </div>
     </div>
 
@@ -648,7 +708,7 @@ function dashFixedCard() {
 }
 
 function dashAndreasCard() {
-  const fixedItems    = (md().fixed    || []).filter(i => i.splitWith);
+  const fixedItems = (md().fixed || []).filter(i => i.splitWith);
   const variableItems = (md().variable || []).filter(i => i.splitWith);
   const allItems = [
     ...fixedItems.map(i => ({ ...i, _amount: i.amount, _type: 'fixed' })),
@@ -663,7 +723,7 @@ function dashAndreasCard() {
       : (VARIABLE_CATEGORIES.find(c => c.id === item.category) || VARIABLE_CATEGORIES[0]);
     const andreasShare = item.splitShare ?? 100;
     const andreasAmount = item._amount * (andreasShare / 100);
-    const yourAmount    = item._amount - andreasAmount;
+    const yourAmount = item._amount - andreasAmount;
     const andreasLaysOut = item.splitWith === 'andreas';
     const rowBg = andreasLaysOut && yourAmount > 0
       ? 'background:var(--danger-bg);'
@@ -686,15 +746,13 @@ function dashAndreasCard() {
       </div>`;
   };
 
-  const fixedRows    = fixedItems.length    ? `<div style="padding:6px 16px 2px;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">Fasta kostnader</div>${fixedItems.map(i => makeRow({ ...i, _amount: i.amount, _type: 'fixed' })).join('')}` : '';
+  const fixedRows = fixedItems.length ? `<div style="padding:6px 16px 2px;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">Fasta kostnader</div>${fixedItems.map(i => makeRow({ ...i, _amount: i.amount, _type: 'fixed' })).join('')}` : '';
   const variableRows = variableItems.length ? `<div style="padding:6px 16px 2px;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">Rörliga kostnader</div>${variableItems.map(i => makeRow({ ...i, _amount: i.budget, _type: 'variable' })).join('')}` : '';
 
   // splitShare = Andreas's share in %
   // When you lay out (splitWith !== 'andreas'): Andreas owes you his share = splitShare%
   // When Andreas lays out (splitWith === 'andreas'): you owe Andreas your share = (100 - splitShare)%
-  const andreasOwes = sum(allItems.filter(i => i.splitWith !== 'andreas'), i => i._amount * ((i.splitShare ?? 100) / 100));
-  const youOwe      = sum(allItems.filter(i => i.splitWith === 'andreas'),  i => i._amount * ((100 - (i.splitShare ?? 100)) / 100));
-  const net = youOwe - andreasOwes;
+  const net = calcAndreasNet(md());
   const summaryLabel = net > 0 ? 'Du är skyldig Andreas' : net < 0 ? 'Andreas är skyldig dig' : 'Ni är jämna';
 
   const netColor = net > 0 ? 'var(--danger)' : net < 0 ? 'var(--success)' : 'var(--text-muted)';
@@ -732,41 +790,44 @@ function dashPeriodicCard(yyyyMm) {
     </div>`;
 
   const thisRows = thisMonth.map(i => {
+    const myAmount = i.totalAmount * ((i.share ?? 100) / 100);
     let monthlyAmount;
     if (i.frequencyType === 'days' && i.frequencyDays) {
-      monthlyAmount = (i.totalAmount / i.frequencyDays) * 30.44;
+      monthlyAmount = (myAmount / i.frequencyDays) * 30.44;
     } else {
-      monthlyAmount = i.totalAmount / i.frequencyMonths;
+      monthlyAmount = myAmount / i.frequencyMonths;
     }
     return makeRow(i, monthlyAmount,
-      `BETALA NU: ${fmt(i.totalAmount)} · ${h(i.frequencyType === 'days' && i.frequencyDays ? 'var ' + i.frequencyDays + ':e dag' : FREQ_LABELS[i.frequencyMonths] || 'periodiskt')}`)
+      `BETALA NU: ${fmt(myAmount)} · ${h(i.frequencyType === 'days' && i.frequencyDays ? 'var ' + i.frequencyDays + ':e dag' : FREQ_LABELS[i.frequencyMonths] || 'periodiskt')}`)
   }).join('');
   const avgRows = undated.map(i => {
+    const myAmount = i.totalAmount * ((i.share ?? 100) / 100);
     let monthlyAmount;
     if (i.frequencyType === 'days' && i.frequencyDays) {
-      monthlyAmount = (i.totalAmount / i.frequencyDays) * 30.44;
+      monthlyAmount = (myAmount / i.frequencyDays) * 30.44;
     } else {
-      monthlyAmount = i.totalAmount / i.frequencyMonths;
+      monthlyAmount = myAmount / i.frequencyMonths;
     }
     return makeRow(i, monthlyAmount,
-      `${fmt(i.totalAmount)} · ${h(i.frequencyType === 'days' && i.frequencyDays ? 'var ' + i.frequencyDays + ':e dag' : FREQ_LABELS[i.frequencyMonths] || 'periodiskt')}`)
+      `${fmt(myAmount)} · ${h(i.frequencyType === 'days' && i.frequencyDays ? 'var ' + i.frequencyDays + ':e dag' : FREQ_LABELS[i.frequencyMonths] || 'periodiskt')}`)
   }).join('');
   const otherRows = otherMonths.map(i => {
-    const ny = i.paymentMonth.substring(0, 4), nm = i.paymentMonth.substring(5, 7);
+    const [py, pm] = i.paymentMonth.split('-').map(Number);
     const [ty, tm] = yyyyMm.split('-').map(Number);
-    const diff = (Number(ny) - ty) * 12 + (Number(nm) - tm);
-    // Find next occurrence
-    let modsLeft = ((diff % i.frequencyMonths) + i.frequencyMonths) % i.frequencyMonths;
-    if (modsLeft === 0) modsLeft = i.frequencyMonths;
-    const nextDate = new Date(ty, tm - 1 + modsLeft, 15);
+    // Find next occurrence on or after yyyyMm by stepping forward from paymentMonth
+    const diff = (ty - py) * 12 + (tm - pm);
+    const cyclesPassed = diff > 0 ? Math.ceil(diff / i.frequencyMonths) : 0;
+    const monthsAhead = cyclesPassed * i.frequencyMonths;
+    const nextDate = new Date(py, pm - 1 + monthsAhead, 15);
     const nextLabel = new Intl.DateTimeFormat('sv-SE', { month: 'long', year: 'numeric' }).format(nextDate);
 
     // Calculate monthly amount to set aside
+    const myAmount = i.totalAmount * ((i.share ?? 100) / 100);
     let monthlyAmount;
     if (i.frequencyType === 'days' && i.frequencyDays) {
-      monthlyAmount = (i.totalAmount / i.frequencyDays) * 30.44;
+      monthlyAmount = (myAmount / i.frequencyDays) * 30.44;
     } else {
-      monthlyAmount = i.totalAmount / i.frequencyMonths;
+      monthlyAmount = myAmount / i.frequencyMonths;
     }
 
     return makeRow(i, monthlyAmount,
@@ -809,7 +870,7 @@ function renderIncome() {
   const total = sum(m.income, i => i.amount);
 
   const rows = m.income.map(item => `
-    <div class="item-row">
+    <div class="item-row" id="item-income-${item.id}">
       <div class="item-icon" style="background:var(--success-bg)">💰</div>
       <div class="item-info">
         <div class="item-name">${h(item.name)}</div>
@@ -887,7 +948,7 @@ function renderFixed() {
         ? `${Math.round(item.loanAmount / 1000)}\u00a0kkr · ${(item.listRate - (item.rateDiscount || 0)).toFixed(2)}% · ${item.taxMode === 'after' ? 'inkl. skatterabatt' : 'exkl. skatterabatt'}${dStr}${andreasBadge}`
         : `${companyStr}<span class="badge badge-${cat.id}">${h(cat.label)}</span> ${shareBadge} ${personBadge}${periodStr}${dStr}${andreasBadge}`;
       return `
-        <div class="item-row">
+        <div class="item-row" id="item-fixed-${item.id}">
           <div class="item-icon" style="background:${cat.bg}">${cat.icon}</div>
           <div class="item-info">
             <div class="item-name">${h(item.name)}</div>
@@ -968,7 +1029,7 @@ function renderVariable() {
             : toLbl ? ` · Till ${toLbl}`
               : '';
       return `
-      <div class="item-row">
+      <div class="item-row" id="item-variable-${item.id}">
         <div class="item-icon" style="background:${cat.bg}">${cat.icon}</div>
         <div class="item-info">
           <div class="item-name">${h(item.name)}</div>
@@ -1030,10 +1091,11 @@ function renderPeriodic() {
   const m = md();
 
   function getMonthlyAmount(item) {
+    const myAmount = item.totalAmount * ((item.share ?? 100) / 100);
     if (item.frequencyType === 'days' && item.frequencyDays) {
-      return (item.totalAmount / item.frequencyDays) * 30.44;
+      return (myAmount / item.frequencyDays) * 30.44;
     }
-    return item.totalAmount / item.frequencyMonths;
+    return myAmount / item.frequencyMonths;
   }
 
   function getFreqLabel(item) {
@@ -1050,17 +1112,19 @@ function renderPeriodic() {
     const monthly = getMonthlyAmount(item);
     let nextInfo = '';
     if (item.paymentMonth) {
-      const [ny, nm] = item.paymentMonth.split('-').map(Number);
+      const [py, pm] = item.paymentMonth.split('-').map(Number);
       const now = new Date();
       const [cy, cm] = [now.getFullYear(), now.getMonth() + 1];
-      const diff = (ny - cy) * 12 + (nm - cm);
-      let modsLeft = ((diff % item.frequencyMonths) + item.frequencyMonths) % item.frequencyMonths;
-      const nextDate = new Date(cy, cm - 1 + modsLeft, 15);
+      const diff = (cy - py) * 12 + (cm - pm);
+      // How many full cycles have passed since paymentMonth?
+      const cyclesPassed = diff > 0 ? Math.ceil(diff / item.frequencyMonths) : 0;
+      const monthsAhead = cyclesPassed * item.frequencyMonths;
+      const nextDate = new Date(py, pm - 1 + monthsAhead, 15);
       const nextLabel = new Intl.DateTimeFormat('sv-SE', { month: 'long', year: 'numeric' }).format(nextDate);
       nextInfo = ` · Nästa: ${nextLabel}`;
     }
     return `
-      <div class="item-row">
+      <div class="item-row" id="item-periodic-${item.id}">
         <div class="item-icon" style="background:var(--warning-bg)">📅</div>
         <div class="item-info">
           <div class="item-name">${h(item.name)}</div>
@@ -1207,14 +1271,16 @@ function showAddIncome() {
 }
 
 function editIncome(id) {
-  const item = md().income.find(i => i.id === id);
+  const item = findItemInAnyMonth('income', id);
   if (!item) return;
+  const itemMonth = state.month;
   showModal('Redigera inkomst', incomeForm(item), () => {
     const name = document.getElementById('f-name').value.trim();
     const amount = parseFloat(document.getElementById('f-amount').value);
     if (!name) return notify('Ange ett namn.');
     if (!(amount > 0)) return notify('Ange ett giltigt belopp.');
     item.name = name; item.amount = amount;
+    state.month = itemMonth;
     saveData(); closeModal(); renderIncome();
   });
 }
@@ -1412,8 +1478,9 @@ function showAddFixed() {
 }
 
 function editFixed(id) {
-  const item = md().fixed.find(i => i.id === id);
+  const item = findItemInAnyMonth('fixed', id);
   if (!item) return;
+  const itemMonth = state.month;
   showModal('Redigera fast kostnad', fixedForm(item), () => {
     const name = document.getElementById('f-name').value.trim();
     const company = document.getElementById('f-company').value.trim() || null;
@@ -1427,9 +1494,13 @@ function editFixed(id) {
     const splitEnabled = document.getElementById('f-split-toggle').checked;
     const splitWith = splitEnabled ? (document.querySelector('input[name="split-payer"]:checked')?.value || 'jag') : null;
     const splitShare = splitEnabled ? (v => isNaN(v) ? 100 : v)(parseInt(document.getElementById('f-split-share').value, 10)) : null;
-    item.period = resolved.period; item.person = person;
+    if (!name) return notify('Ange ett namn.');
+    if (!resolved) return notify('Ange ett giltigt belopp.');
+    item.name = name; item.company = company; item.category = category;
+    item.amount = resolved.monthly; item.period = resolved.period; item.person = person;
     item.periodFrom = periodFrom; item.periodTo = periodTo; item.debitDay = debitDay; item.debitMonthOffset = debitMonthOffset;
     item.splitWith = splitWith; item.splitShare = splitShare;
+    state.month = itemMonth;
     saveData(); closeModal(); renderFixed();
   });
   attachFixedPreview();
@@ -1761,8 +1832,9 @@ function showAddVariable() {
 }
 
 function editVariable(id) {
-  const item = md().variable.find(i => i.id === id);
+  const item = findItemInAnyMonth('variable', id);
   if (!item) return;
+  const itemMonth = state.month;
   showModal('Redigera rörlig kostnad', variableForm(item), () => {
     const name = document.getElementById('f-name').value.trim();
     const budget = parseFloat(document.getElementById('f-budget').value);
@@ -1781,6 +1853,7 @@ function editVariable(id) {
     item.name = name; item.budget = budget; item.category = category;
     item.periodType = periodType; item.periodFrom = periodFrom; item.periodTo = periodTo; item.note = note; item.debitDay = debitDay; item.debitMonthOffset = debitMonthOffset;
     item.splitWith = splitWith; item.splitShare = splitShare;
+    state.month = itemMonth;
     saveData(); closeModal(); renderVariable();
   });
   attachVariableSplitSync();
@@ -1829,8 +1902,9 @@ function periodicForm(item) {
       <input type="text" id="f-name" class="form-input" placeholder="T.ex. Bilservice, Semesterkassa, Årsavgift" value="${h(item?.name ?? '')}">
     </div>
     <div class="form-group">
-      <label class="form-label">Belopp per tillfälle (kr)</label>
+      <label class="form-label">Belopp per betalningstillfälle (kr)</label>
       <input type="number" id="f-amount" class="form-input" placeholder="0" min="0" step="1" value="${item?.totalAmount ?? ''}">
+      <div class="form-hint">Hela summan du betalar varje gång — appen delar upp det i en månadsavsättning automatiskt.</div>
     </div>
     <div class="form-group">
       <label class="form-label">Hur ofta?</label>
@@ -1849,8 +1923,9 @@ function periodicForm(item) {
       <div class="form-hint">Sätt lägre än 100% om du delar kostnaden med någon.</div>
     </div>
     <div class="form-group">
-      <label class="form-label">Förfallomånad <span style="font-weight:400;color:var(--text-light)">(valfritt – ange en känd betalningsmånad)</span></label>
+      <label class="form-label">Nästa betalningsmånad <span style="font-weight:400;color:var(--text-light)">(valfritt)</span></label>
       <input type="month" id="f-payment-month" class="form-input" value="${h(item?.paymentMonth ?? '')}">
+      <div class="form-hint">Ange en månad då du vet att betalningen sker — appen räknar automatiskt ut nästa och kommande tillfällen utifrån hur ofta du valt ovan. Lämna tomt om du bara vill spara ihop månadsvis utan att koppla till en specifik månad.</div>
     </div>
     <div class="form-group">
       <label class="form-label">Gäller <span style="font-weight:400;color:var(--text-muted)">(valfritt)</span></label>
@@ -1962,8 +2037,9 @@ function showAddPeriodic() {
 }
 
 function editPeriodic(id) {
-  const item = md().periodic.find(i => i.id === id);
+  const item = findItemInAnyMonth('periodic', id);
   if (!item) return;
+  const itemMonth = state.month;
   showModal('Redigera periodisk kostnad', periodicForm(item), () => {
     const name = document.getElementById('f-name').value.trim();
     const totalAmount = parseFloat(document.getElementById('f-amount').value);
@@ -1989,9 +2065,8 @@ function editPeriodic(id) {
       frequencyType = 'months';
     }
 
-    const myAmount = Math.round(totalAmount * (share / 100) * 100) / 100;
     item.name = name;
-    item.totalAmount = myAmount;
+    item.totalAmount = totalAmount;
     item.share = share;
     item.frequencyMonths = frequencyMonths;
     item.frequencyDays = frequencyDays;
@@ -2001,6 +2076,7 @@ function editPeriodic(id) {
     item.person = person;
     item.debitDay = debitDay;
     item.debitMonthOffset = debitMonthOffset;
+    state.month = itemMonth;
     saveData(); closeModal(); renderPeriodic();
   });
   attachPeriodicPreview();
@@ -2011,12 +2087,34 @@ function editPeriodic(id) {
    ============================================= */
 
 function deleteItem(collection, id) {
-  if (!confirm('Ta bort posten?')) return;
   const m = state.data.months[state.month];
   if (!m || !m[collection]) return;
-  m[collection] = m[collection].filter(i => i.id !== id);
-  saveData();
-  render();
+  const item = m[collection].find(i => i.id === id);
+  const name = item?.name ?? 'posten';
+
+  const overlay = document.getElementById('modal-overlay');
+  const modal = document.getElementById('modal');
+  modal.className = 'modal-narrow';
+  modal.innerHTML = `
+    <div class="modal-header">
+      <h2>Ta bort</h2>
+      <button type="button" class="modal-close" onclick="closeModal()" aria-label="Stäng">×</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0;font-size:14px;color:var(--text)">Vill du ta bort <strong>${h(name)}</strong>?</p>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-ghost" onclick="closeModal()">Avbryt</button>
+      <button type="button" class="btn btn-danger" id="modal-confirm-delete">Ta bort</button>
+    </div>
+  `;
+  document.getElementById('modal-confirm-delete').onclick = () => {
+    m[collection] = m[collection].filter(i => i.id !== id);
+    saveData();
+    closeModal();
+    render();
+  };
+  overlay.classList.remove('hidden');
 }
 
 /* =============================================
@@ -2052,6 +2150,174 @@ function navigateAndScroll(view, anchorId) {
   }, 80);
 }
 
+// Find an item by id in any month, switching state.month to the correct one.
+// Returns the item, or null if not found anywhere.
+function findItemInAnyMonth(type, id) {
+  // Try current month first
+  let item = (md()[type] || []).find(i => i.id === id);
+  if (item) return item;
+  // Search all months
+  for (const [yyyyMm, m] of Object.entries(state.data.months || {})) {
+    item = (m[type] || []).find(i => i.id === id);
+    if (item) {
+      state.month = yyyyMm;
+      return item;
+    }
+  }
+  return null;
+}
+
+/* =============================================
+   SEARCH
+   ============================================= */
+
+function buildSearchIndex() {
+  const results = [];
+  const months = state.data.months || {};
+
+  // Collect all unique items across all months (keyed by item.id to deduplicate)
+  const seen = { fixed: new Set(), variable: new Set(), periodic: new Set(), income: new Set() };
+
+  for (const [yyyyMm, m] of Object.entries(months).sort((a, b) => b[0].localeCompare(a[0]))) {
+    (m.fixed || []).forEach(item => {
+      if (seen.fixed.has(item.id)) return;
+      seen.fixed.add(item.id);
+      const cat = FIXED_CATEGORIES.find(c => c.id === item.category) || { label: 'Fast', icon: '📄', id: item.category || 'other' };
+      results.push({
+        id: item.id, type: 'fixed',
+        name: item.name,
+        meta: [item.company, cat.label].filter(Boolean).join(' · '),
+        amount: item.amount,
+        icon: cat.icon,
+        catId: cat.id,
+        month: yyyyMm,
+      });
+    });
+
+    (m.variable || []).forEach(item => {
+      if (seen.variable.has(item.id)) return;
+      seen.variable.add(item.id);
+      const cat = VARIABLE_CATEGORIES.find(c => c.id === item.category) || { label: 'Rörlig', icon: '🛒', id: item.category || 'other' };
+      results.push({
+        id: item.id, type: 'variable',
+        name: item.name,
+        meta: cat.label,
+        amount: item.budget,
+        icon: cat.icon,
+        month: yyyyMm,
+      });
+    });
+
+    (m.periodic || []).forEach(item => {
+      if (seen.periodic.has(item.id)) return;
+      seen.periodic.add(item.id);
+      results.push({
+        id: item.id, type: 'periodic',
+        name: item.name,
+        meta: 'Periodisk',
+        amount: item.totalAmount,
+        icon: '📅',
+        month: yyyyMm,
+      });
+    });
+
+    (m.income || []).forEach(item => {
+      if (seen.income.has(item.id)) return;
+      seen.income.add(item.id);
+      results.push({
+        id: item.id, type: 'income',
+        name: item.name,
+        meta: 'Inkomst',
+        amount: item.amount,
+        icon: '💰',
+        month: yyyyMm,
+      });
+    });
+  }
+
+  return results;
+}
+
+function handleSearch(query) {
+  const resultsEl = document.getElementById('sidebar-search-results');
+  const clearBtn  = document.getElementById('sidebar-search-clear');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !query);
+  if (!query || query.trim() === '') {
+    resultsEl.classList.add('hidden');
+    return;
+  }
+
+  const q = query.toLowerCase().trim();
+  const index = buildSearchIndex();
+  const matches = index.filter(item =>
+    item.name.toLowerCase().includes(q) ||
+    item.meta.toLowerCase().includes(q) ||
+    String(item.amount).includes(q)
+  ).slice(0, 20);
+
+  if (!matches.length) {
+    resultsEl.innerHTML = `<div class="search-no-results">Inga resultat för "${h(query)}"</div>`;
+    resultsEl.classList.remove('hidden');
+    return;
+  }
+
+  const VIEW_LABELS = { fixed: 'Fasta', variable: 'Rörliga', periodic: 'Periodiska', income: 'Inkomster' };
+  resultsEl.innerHTML = matches.map(item => {
+    const monthLabel = new Intl.DateTimeFormat('sv-SE', { month: 'long', year: 'numeric' })
+      .format(new Date(item.month + '-15'));
+    const monthTitle = monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1);
+    return `
+    <div class="search-result-item" onclick="searchNavigateTo('${item.type}','${item.id}','${item.month}')">
+      <span class="search-result-icon">${item.icon}</span>
+      <span class="search-result-info">
+        <span class="search-result-name">${h(item.name)}</span>
+        <span class="search-result-amount">${fmt(item.amount)}</span>
+        <span class="search-result-meta">${monthTitle}</span>
+      </span>
+    </div>
+  `;
+  }).join('');
+  resultsEl.classList.remove('hidden');
+}
+
+function clearSearch() {
+  const input = document.getElementById('sidebar-search-input');
+  if (input) input.value = '';
+  document.getElementById('sidebar-search-results').classList.add('hidden');
+  document.getElementById('sidebar-search-clear').classList.add('hidden');
+}
+
+function showSearchResults() {
+  const input = document.getElementById('sidebar-search-input');
+  if (input && input.value.trim()) {
+    document.getElementById('sidebar-search-results').classList.remove('hidden');
+  }
+}
+
+function searchNavigateTo(type, id, month) {
+  // Close search
+  document.getElementById('sidebar-search-input').value = '';
+  document.getElementById('sidebar-search-results').classList.add('hidden');
+  document.getElementById('sidebar-search-clear').classList.add('hidden');
+
+  // Switch to the right month if needed
+  if (month && state.month !== month) {
+    state.month = month;
+  }
+
+  // Navigate to view and scroll to item
+  navigateAndScroll(type, `item-${type}-${id}`);
+
+  // Highlight the row briefly
+  setTimeout(() => {
+    const el = document.getElementById(`item-${type}-${id}`);
+    if (el) {
+      el.classList.add('search-highlight');
+      setTimeout(() => el.classList.remove('search-highlight'), 1800);
+    }
+  }, 120);
+}
+
 /* =============================================
    INIT
    ============================================= */
@@ -2059,6 +2325,16 @@ function navigateAndScroll(view, anchorId) {
 document.addEventListener('DOMContentLoaded', () => {
   // Rensa gammal localStorage-data från innan Supabase
   localStorage.removeItem('ekonomi_v1');
+
+  // Stäng sökresultat vid klick utanför input-fältet
+  document.addEventListener('click', e => {
+    const inputEl  = document.getElementById('sidebar-search-input');
+    const clearBtn = document.getElementById('sidebar-search-clear');
+    const resultsEl = document.getElementById('sidebar-search-results');
+    if (e.target !== inputEl && e.target !== clearBtn && !resultsEl.contains(e.target)) {
+      resultsEl.classList.add('hidden');
+    }
+  });
 
   // Login form
   document.getElementById('btn-login').addEventListener('click', handleLogin);
